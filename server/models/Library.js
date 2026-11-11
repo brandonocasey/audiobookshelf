@@ -7,6 +7,7 @@ const Logger = require('../Logger')
  * @property {boolean} disableWatcher
  * @property {boolean} skipMatchingMediaWithAsin
  * @property {boolean} skipMatchingMediaWithIsbn
+ * @property {boolean} autoMatchNewItems Quick match books added by a scan with the library provider
  * @property {string} autoScanCronExpression
  * @property {boolean} audiobooksOnly
  * @property {boolean} hideSingleBookSeries Do not show series that only have 1 book
@@ -70,6 +71,7 @@ class Library extends Model {
         autoScanCronExpression: null,
         skipMatchingMediaWithAsin: false,
         skipMatchingMediaWithIsbn: false,
+        autoMatchNewItems: false,
         audiobooksOnly: false,
         epubsAllowScriptedContent: false,
         hideSingleBookSeries: false,

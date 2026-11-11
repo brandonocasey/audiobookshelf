@@ -588,6 +588,8 @@
   "LabelSettingsAllowIframe": "Allow embedding in an iframe",
   "LabelSettingsAudiobooksOnly": "Audiobooks only",
   "LabelSettingsAudiobooksOnlyHelp": "Enabling this setting will ignore ebook files unless they are inside an audiobook folder in which case they will be set as supplementary ebooks",
+  "LabelSettingsAutoMatchNewItems": "Automatically match new books",
+  "LabelSettingsAutoMatchNewItemsHelp": "Quick match books added by a library scan or the folder watcher using the library's default metadata provider",
   "LabelSettingsBookshelfViewHelp": "Skeumorphic design with wooden shelves",
   "LabelSettingsChromecastSupport": "Chromecast support",
   "LabelSettingsDateFormat": "Date Format",

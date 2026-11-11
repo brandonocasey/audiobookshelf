@@ -424,6 +424,33 @@ class Scanner {
   }
 
   /**
+   * Quick match library item with the library provider unless the library skip settings apply
+   *
+   * @param {import('../routers/ApiRouter')} apiRouterCtx
+   * @param {import('../models/Library')} library
+   * @param {import('../models/LibraryItem')} libraryItem
+   * @returns {Promise<boolean>} true if library item was updated
+   */
+  async matchLibraryItem(apiRouterCtx, library, libraryItem) {
+    if (libraryItem.media.asin && library.settings.skipMatchingMediaWithAsin) {
+      Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ASIN`)
+      return false
+    }
+
+    if (libraryItem.media.isbn && library.settings.skipMatchingMediaWithIsbn) {
+      Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ISBN`)
+      return false
+    }
+
+    const result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider })
+    if (result.warning) {
+      Logger.warn(`[Scanner] matchLibraryItems: Match warning ${result.warning} for library item "${libraryItem.media.title}"`)
+      return false
+    }
+    return result.updated
+  }
+
+  /**
    * Quick match library items
    *
    * @param {import('../routers/ApiRouter')} apiRouterCtx
@@ -436,21 +463,8 @@ class Scanner {
     for (let i = 0; i < libraryItems.length; i++) {
       const libraryItem = libraryItems[i]
 
-      if (libraryItem.media.asin && library.settings.skipMatchingMediaWithAsin) {
-        Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ASIN (${i + 1} of ${libraryItems.length})`)
-        continue
-      }
-
-      if (libraryItem.media.isbn && library.settings.skipMatchingMediaWithIsbn) {
-        Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ISBN (${i + 1} of ${libraryItems.length})`)
-        continue
-      }
-
       Logger.debug(`[Scanner] matchLibraryItems: Quick matching "${libraryItem.media.title}" (${i + 1} of ${libraryItems.length})`)
-      const result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider })
-      if (result.warning) {
-        Logger.warn(`[Scanner] matchLibraryItems: Match warning ${result.warning} for library item "${libraryItem.media.title}"`)
-      } else if (result.updated) {
+      if (await this.matchLibraryItem(apiRouterCtx, library, libraryItem)) {
         libraryScan.resultsUpdated++
       }
 

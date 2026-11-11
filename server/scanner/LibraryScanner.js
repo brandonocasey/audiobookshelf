@@ -18,6 +18,8 @@ const Task = require('../objects/Task')
 class LibraryScanner {
   constructor() {
     this.cancelLibraryScan = {}
+    /** @type {import('../routers/ApiRouter')} - set by Server, used to quick match new items */
+    this.apiRouter = null
     /** @type {string[]} - library ids */
     this.librariesScanning = []
 
@@ -260,6 +262,7 @@ class LibraryScanner {
     if (this.shouldCancelScan(libraryScan)) return true
 
     // Add new library items
+    const addedLibraryItems = []
     if (libraryItemDataFound.length) {
       let newLibraryItems = []
       for (const libraryItemData of libraryItemDataFound) {
@@ -267,6 +270,7 @@ class LibraryScanner {
         const newLibraryItem = await LibraryItemScanner.scanNewLibraryItem(libraryItemData, libraryScan.library.settings, libraryScan)
         if (newLibraryItem) {
           newLibraryItems.push(newLibraryItem)
+          addedLibraryItems.push(newLibraryItem)
 
           libraryScan.resultsAdded++
         }
@@ -286,11 +290,39 @@ class LibraryScanner {
       }
     }
 
+    await this.autoMatchAddedLibraryItems(libraryScan, addedLibraryItems)
+    if (this.shouldCancelScan(libraryScan)) return true
+
     // Author book count updates and empty authors/series cleanup after all items are processed
     await LibraryItemScanner.finalizeAuthorsAndSeriesFromScan(libraryScan.libraryId, libraryScan)
 
     libraryScan.addLog(LogLevel.INFO, `Scan completed. ${libraryScan.resultStats}`)
     return false
+  }
+
+  /**
+   * Quick match library items added by a library scan if the library has auto match enabled
+   *
+   * @param {LibraryScan} libraryScan
+   * @param {import('../models/LibraryItem')[]} addedLibraryItems
+   */
+  async autoMatchAddedLibraryItems(libraryScan, addedLibraryItems) {
+    if (!libraryScan.library.settings.autoMatchNewItems || !addedLibraryItems.length) return
+
+    libraryScan.addLog(LogLevel.INFO, `Matching ${addedLibraryItems.length} new library items`)
+    await getScanner().matchLibraryItemsChunk(this.apiRouter, libraryScan.library, addedLibraryItems, libraryScan)
+  }
+
+  /**
+   * Quick match library item added by the watcher if the library has auto match enabled
+   *
+   * @param {import('../models/Library')} library
+   * @param {import('../models/LibraryItem')} libraryItem
+   */
+  async autoMatchAddedLibraryItem(library, libraryItem) {
+    if (!library.settings.autoMatchNewItems) return
+
+    await getScanner().matchLibraryItem(this.apiRouter, library, libraryItem)
   }
 
   shouldCancelScan(libraryScan) {
@@ -646,6 +678,7 @@ class LibraryScanner {
       }
       if (newLibraryItem) {
         SocketAuthority.libraryItemEmitter('item_added', newLibraryItem)
+        await this.autoMatchAddedLibraryItem(library, newLibraryItem)
       }
       itemGroupingResults[itemDir] = newLibraryItem ? ScanResult.ADDED : ScanResult.NOTHING
     }
@@ -654,6 +687,15 @@ class LibraryScanner {
   }
 }
 module.exports = new LibraryScanner()
+
+/**
+ * Scanner requires this module, so it is loaded on first use
+ *
+ * @returns {import('./Scanner')}
+ */
+function getScanner() {
+  return require('./Scanner')
+}
 
 /**
  * @param {string} title

@@ -40,6 +40,10 @@ components:
           description: Whether to skip matching books that already have an ISBN.
           type: boolean
           example: false
+        autoMatchNewItems:
+          description: Whether to quick match books that scans or the watcher add, using the library provider.
+          type: boolean
+          example: false
         autoScanCronExpression:
           description: The cron expression for when to automatically scan the library folders. If null, automatic scanning will be disabled.
           type: string

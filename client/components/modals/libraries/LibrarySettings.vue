@@ -41,6 +41,17 @@
       </div>
       <div v-if="isBookLibrary" class="p-2 w-full md:w-1/2">
         <div class="flex items-center">
+          <ui-toggle-switch v-model="autoMatchNewItems" :label="$strings.LabelSettingsAutoMatchNewItems" size="sm" @input="formUpdated" />
+          <ui-tooltip :text="$strings.LabelSettingsAutoMatchNewItemsHelp">
+            <p class="pl-4 text-sm">
+              {{ $strings.LabelSettingsAutoMatchNewItems }}
+              <span class="material-symbols icon-text text-sm">info</span>
+            </p>
+          </ui-tooltip>
+        </div>
+      </div>
+      <div v-if="isBookLibrary" class="p-2 w-full md:w-1/2">
+        <div class="flex items-center">
           <ui-toggle-switch v-model="hideSingleBookSeries" size="sm" @input="formUpdated" />
           <ui-tooltip :text="$strings.LabelSettingsHideSingleBookSeriesHelp">
             <p class="pl-4 text-sm">
@@ -108,6 +119,7 @@ export default {
       enableWatcher: false,
       skipMatchingMediaWithAsin: false,
       skipMatchingMediaWithIsbn: false,
+      autoMatchNewItems: false,
       audiobooksOnly: false,
       epubsAllowScriptedContent: false,
       hideSingleBookSeries: false,
@@ -166,6 +178,7 @@ export default {
           disableWatcher: !this.enableWatcher,
           skipMatchingMediaWithAsin: !!this.skipMatchingMediaWithAsin,
           skipMatchingMediaWithIsbn: !!this.skipMatchingMediaWithIsbn,
+          autoMatchNewItems: !!this.autoMatchNewItems,
           audiobooksOnly: !!this.audiobooksOnly,
           epubsAllowScriptedContent: !!this.epubsAllowScriptedContent,
           hideSingleBookSeries: !!this.hideSingleBookSeries,
@@ -184,6 +197,7 @@ export default {
       this.enableWatcher = !this.librarySettings.disableWatcher
       this.skipMatchingMediaWithAsin = !!this.librarySettings.skipMatchingMediaWithAsin
       this.skipMatchingMediaWithIsbn = !!this.librarySettings.skipMatchingMediaWithIsbn
+      this.autoMatchNewItems = !!this.librarySettings.autoMatchNewItems
       this.audiobooksOnly = !!this.librarySettings.audiobooksOnly
       this.epubsAllowScriptedContent = !!this.librarySettings.epubsAllowScriptedContent
       this.hideSingleBookSeries = !!this.librarySettings.hideSingleBookSeries

@@ -124,6 +124,7 @@ export default {
           disableWatcher: false,
           skipMatchingMediaWithAsin: false,
           skipMatchingMediaWithIsbn: false,
+          autoMatchNewItems: false,
           autoScanCronExpression: null,
           hideSingleBookSeries: false,
           onlyShowLaterBooksInContinueSeries: false,
