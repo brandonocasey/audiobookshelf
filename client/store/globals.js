@@ -27,6 +27,7 @@ export const state = () => ({
   isCasting: false, // Actively casting
   isChromecastInitialized: false, // Script loadeds
   showBatchQuickMatchModal: false,
+  organizePreviewRequest: null,
   dateFormats: [
     {
       text: 'MM/DD/YYYY',
@@ -203,6 +204,9 @@ export const mutations = {
   },
   setShowBatchQuickMatchModal(state, val) {
     state.showBatchQuickMatchModal = val
+  },
+  setOrganizePreviewRequest(state, request) {
+    state.organizePreviewRequest = request
   },
   resetSelectedMediaItems(state) {
     state.selectedMediaItems = []

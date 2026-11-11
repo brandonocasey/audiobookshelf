@@ -48,6 +48,20 @@
       </widgets-alert>
     </div>
 
+    <!-- Organize files -->
+    <div class="w-full border border-black-200 p-4 my-8">
+      <div class="flex items-center">
+        <div>
+          <p class="text-lg">{{ $strings.HeaderOrganizeFiles }}</p>
+          <p class="max-w-sm text-sm pt-2 text-gray-300">{{ $strings.LabelOrganizeFilesDescription }}</p>
+        </div>
+        <div class="grow" />
+        <div>
+          <ui-btn @click.stop="openOrganizePreview">{{ $strings.ButtonOrganizeFiles }}</ui-btn>
+        </div>
+      </div>
+    </div>
+
     <p v-if="!mediaTracks.length" class="text-lg text-center my-8">{{ $strings.MessageNoAudioTracks }}</p>
   </div>
 </template>
@@ -104,6 +118,9 @@ export default {
     }
   },
   methods: {
+    openOrganizePreview() {
+      this.$store.commit('globals/setOrganizePreviewRequest', { libraryItemIds: [this.libraryItemId] })
+    },
     quickEmbed() {
       const payload = {
         message: this.$strings.MessageConfirmQuickEmbed,

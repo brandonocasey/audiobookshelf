@@ -1,5 +1,18 @@
 <template>
   <div class="w-full h-full px-1 md:px-2 py-1 mb-4">
+    <div v-if="isBookLibrary" class="w-full border border-black-200 p-4 my-8">
+      <div class="flex flex-wrap items-center">
+        <div>
+          <p class="text-lg">{{ $strings.LabelOrganizeAllItems }}</p>
+          <p class="max-w-sm text-sm pt-2 text-gray-300">{{ $strings.LabelOrganizeAllItemsDescription }}</p>
+        </div>
+        <div class="grow" />
+        <div>
+          <ui-btn @click.stop="openOrganizePreview">{{ $strings.ButtonOrganizeFiles }}</ui-btn>
+        </div>
+      </div>
+    </div>
+
     <div class="w-full border border-black-200 p-4 my-8">
       <div class="flex flex-wrap items-center">
         <div>
@@ -41,6 +54,9 @@ export default {
     }
   },
   methods: {
+    openOrganizePreview() {
+      this.$store.commit('globals/setOrganizePreviewRequest', { libraryId: this.libraryId })
+    },
     removeAllMetadataClick(ext) {
       const payload = {
         message: this.$getString('MessageConfirmRemoveMetadataFiles', [ext]),
