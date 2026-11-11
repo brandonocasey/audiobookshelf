@@ -62,7 +62,7 @@ class Scanner {
       const matchData = results[0]
       if (isBelowMinConfidence(matchData.matchConfidence, options.minConfidence)) {
         return {
-          warning: `${provider} match confidence ${formatConfidencePercent(matchData.matchConfidence)} is below minimum ${formatConfidencePercent(options.minConfidence)}`
+          warning: `${provider} match confidence ${formatMatchConfidence(matchData.matchConfidence)} is below minimum ${formatMinConfidence(options.minConfidence)}`
         }
       }
 
@@ -589,10 +589,20 @@ function isBelowMinConfidence(matchConfidence, minConfidence) {
 }
 
 /**
- * @param {number} [confidence] - 0-1
+ * Rounds down so a skipped confidence never shows as equal to the minimum
+ *
+ * @param {number} [matchConfidence] - 0-1
  * @returns {string}
  */
-function formatConfidencePercent(confidence) {
-  if (typeof confidence !== 'number') return 'unknown'
-  return `${Math.round(confidence * 1000) / 10}%`
+function formatMatchConfidence(matchConfidence) {
+  if (typeof matchConfidence !== 'number') return 'unknown'
+  return `${Math.floor(matchConfidence * 10000 + MATCH_CONFIDENCE_TOLERANCE) / 100}%`
+}
+
+/**
+ * @param {number} minConfidence - 0-1
+ * @returns {string}
+ */
+function formatMinConfidence(minConfidence) {
+  return `${Math.round(minConfidence * 1e8) / 1e6}%`
 }

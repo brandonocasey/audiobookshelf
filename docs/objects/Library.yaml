@@ -50,7 +50,7 @@ components:
           enum: [audible, audible.ca, audible.uk, audible.au, audible.fr, audible.de, audible.jp, audible.it, audible.in, audible.es]
           example: audible
         autoMatchMinConfidence:
-          description: Minimum match confidence percent for auto matches. Results without a confidence are skipped. Null means no minimum.
+          description: Minimum match confidence percent for auto matches. While set, results without a confidence are skipped. Null means no minimum.
           type: number
           nullable: true
           example: 90

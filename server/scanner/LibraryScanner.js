@@ -291,10 +291,10 @@ class LibraryScanner {
     }
 
     await this.autoMatchAddedLibraryItems(libraryScan, addedLibraryItemIds)
-    if (this.shouldCancelScan(libraryScan)) return true
 
     // Author book count updates and empty authors/series cleanup after all items are processed
     await LibraryItemScanner.finalizeAuthorsAndSeriesFromScan(libraryScan.libraryId, libraryScan)
+    if (this.shouldCancelScan(libraryScan)) return true
 
     libraryScan.addLog(LogLevel.INFO, `Scan completed. ${libraryScan.resultStats}`)
     return false
@@ -329,7 +329,7 @@ class LibraryScanner {
     if (!library.settings.autoMatchNewItems) return
 
     const options = {
-      provider: library.settings.autoMatchProvider || Database.libraryModel.getDefaultLibrarySettingsForMediaType(library.mediaType).autoMatchProvider
+      provider: library.settings.autoMatchProvider
     }
     const minConfidencePercent = library.settings.autoMatchMinConfidence
     if (typeof minConfidencePercent === 'number') {

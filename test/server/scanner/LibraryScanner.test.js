@@ -9,6 +9,7 @@ const Database = require('../../../server/Database')
 const Logger = require('../../../server/Logger')
 const BookFinder = require('../../../server/finders/BookFinder')
 const LibraryScanner = require('../../../server/scanner/LibraryScanner')
+const LibraryItemScanner = require('../../../server/scanner/LibraryItemScanner')
 const TaskManager = require('../../../server/managers/TaskManager')
 const Task = require('../../../server/objects/Task')
 
@@ -122,22 +123,14 @@ describe('LibraryScanner auto match new items', () => {
       expect((await Database.libraryModel.findByPk(library.id)).lastScan).to.exist
     })
 
-    describe('provider', () => {
-      const cases = [
-        { name: 'searches the auto match provider instead of the library provider', autoMatchProvider: 'audible.uk', expectedProvider: 'audible.uk' },
-        { name: 'searches Audible.com when the library has no auto match provider', autoMatchProvider: undefined, expectedProvider: 'audible' }
-      ]
-      cases.forEach(({ name, autoMatchProvider, expectedProvider }) => {
-        it(name, async () => {
-          library.settings = { ...library.settings, autoMatchNewItems: true, autoMatchProvider }
-          await library.save()
-          addBookFolder('Some Author/New Book')
+    it('searches the auto match provider instead of the library provider', async () => {
+      library.settings = { ...library.settings, autoMatchNewItems: true, autoMatchProvider: 'audible.uk' }
+      await library.save()
+      addBookFolder('Some Author/New Book')
 
-          await runLibraryScan()
+      await runLibraryScan()
 
-          expect(BookFinder.search.firstCall.args[1]).to.equal(expectedProvider)
-        })
-      })
+      expect(BookFinder.search.firstCall.args[1]).to.equal('audible.uk')
     })
 
     describe('minimum confidence', () => {
@@ -162,6 +155,39 @@ describe('LibraryScanner auto match new items', () => {
           expect(await getIsbnByTitle('New Book')).to.equal(expectedIsbn)
         })
       })
+
+      const warningCases = [
+        { name: 'warns with percents when skipping a match', minConfidence: 90, matchConfidence: 0.37, expectedWarning: 'audible match confidence 37% is below minimum 90%' },
+        { name: 'warns below the minimum when the confidence rounds up to it', minConfidence: 90, matchConfidence: 0.89996, expectedWarning: 'audible match confidence 89.99% is below minimum 90%' },
+        { name: 'warns with an unknown confidence', minConfidence: 37.5, matchConfidence: undefined, expectedWarning: 'audible match confidence unknown is below minimum 37.5%' }
+      ]
+      warningCases.forEach(({ name, minConfidence, matchConfidence, expectedWarning }) => {
+        it(name, async () => {
+          BookFinder.search.resolves([{ title: 'Matched Title', isbn: matchedIsbn, matchConfidence }])
+          library.settings = { ...library.settings, autoMatchNewItems: true, autoMatchMinConfidence: minConfidence }
+          await library.save()
+          addBookFolder('Some Author/New Book')
+
+          await runLibraryScan()
+
+          expect(Logger.warn.calledWithMatch(expectedWarning)).to.be.true
+        })
+      })
+    })
+
+    it('cleans up authors and series when the scan is canceled during auto match', async () => {
+      const finalizeSpy = sinon.spy(LibraryItemScanner, 'finalizeAuthorsAndSeriesFromScan')
+      BookFinder.search.callsFake(async () => {
+        LibraryScanner.setCancelLibraryScan(library.id)
+        return [{ title: 'Matched Title', isbn: matchedIsbn }]
+      })
+      await setAutoMatchNewItems(true)
+      addBookFolder('Some Author/New Book')
+
+      await runLibraryScan()
+
+      expect(finalizeSpy.calledOnce).to.be.true
+      expect((await Database.libraryModel.findByPk(library.id)).lastScan).to.not.exist
     })
 
     it('does not match books that existed before the scan', async () => {
