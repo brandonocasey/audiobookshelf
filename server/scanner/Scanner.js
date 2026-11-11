@@ -442,7 +442,13 @@ class Scanner {
       return false
     }
 
-    const result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider })
+    let result
+    try {
+      result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider })
+    } catch (error) {
+      Logger.error(`[Scanner] matchLibraryItems: Failed to match library item "${libraryItem.media.title}"`, error)
+      return false
+    }
     if (result.warning) {
       Logger.warn(`[Scanner] matchLibraryItems: Match warning ${result.warning} for library item "${libraryItem.media.title}"`)
       return false

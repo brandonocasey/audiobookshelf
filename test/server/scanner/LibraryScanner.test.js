@@ -9,6 +9,7 @@ const Database = require('../../../server/Database')
 const Logger = require('../../../server/Logger')
 const BookFinder = require('../../../server/finders/BookFinder')
 const LibraryScanner = require('../../../server/scanner/LibraryScanner')
+const TaskManager = require('../../../server/managers/TaskManager')
 const Task = require('../../../server/objects/Task')
 
 describe('LibraryScanner auto match new items', () => {
@@ -68,6 +69,13 @@ describe('LibraryScanner auto match new items', () => {
     await LibraryScanner.scan(libraryWithFolders)
   }
 
+  function rejectSearchForTitle(failingTitle) {
+    BookFinder.search.callsFake(async (libraryItem, provider, title) => {
+      if (title === failingTitle) throw new Error('Provider failure')
+      return [{ title: 'Matched Title', isbn: matchedIsbn }]
+    })
+  }
+
   async function getIsbnByTitle(title) {
     const book = await Database.bookModel.findOne({ where: { title } })
     expect(book, `book "${title}"`).to.exist
@@ -88,6 +96,30 @@ describe('LibraryScanner auto match new items', () => {
 
         expect(await getIsbnByTitle('New Book')).to.equal(expectedIsbn)
       })
+    })
+
+    it('counts matched new books as added only', async () => {
+      const taskFinishedSpy = sinon.spy(TaskManager, 'taskFinished')
+      await setAutoMatchNewItems(true)
+      addBookFolder('Some Author/New Book')
+
+      await runLibraryScan()
+
+      const { added, updated } = taskFinishedSpy.firstCall.args[0].data.scanResults
+      expect({ added, updated }).to.deep.equal({ added: 1, updated: 0 })
+    })
+
+    it('completes the scan and matches other books when one match fails', async () => {
+      rejectSearchForTitle('Failing Book')
+      await setAutoMatchNewItems(true)
+      addBookFolder('Some Author/Failing Book')
+      addBookFolder('Some Author/New Book')
+
+      await runLibraryScan()
+
+      expect(await getIsbnByTitle('Failing Book')).to.equal(null)
+      expect(await getIsbnByTitle('New Book')).to.equal(matchedIsbn)
+      expect((await Database.libraryModel.findByPk(library.id)).lastScan).to.exist
     })
 
     it('does not match books that existed before the scan', async () => {
@@ -120,6 +152,19 @@ describe('LibraryScanner auto match new items', () => {
 
         expect(await getIsbnByTitle('Watched Book')).to.equal(expectedIsbn)
       })
+    })
+
+    it('keeps the new book when its match fails', async () => {
+      rejectSearchForTitle('Watched Book')
+      await setAutoMatchNewItems(true)
+      const folder = await Database.libraryFolderModel.findOne({ where: { libraryId: library.id } })
+      const filePath = addBookFolder('Some Author/Watched Book')
+      const pendingTask = new Task()
+      pendingTask.setData('watcher-scan', { text: 'Watcher scan' }, null, false)
+
+      await LibraryScanner.scanFilesChanged([{ path: filePath, relPath: Path.relative(libraryPath, filePath), folderId: folder.id, libraryId: library.id, type: 'added' }], pendingTask)
+
+      expect(await getIsbnByTitle('Watched Book')).to.equal(null)
     })
   })
 })

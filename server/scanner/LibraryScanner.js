@@ -262,7 +262,7 @@ class LibraryScanner {
     if (this.shouldCancelScan(libraryScan)) return true
 
     // Add new library items
-    const addedLibraryItems = []
+    const addedLibraryItemIds = []
     if (libraryItemDataFound.length) {
       let newLibraryItems = []
       for (const libraryItemData of libraryItemDataFound) {
@@ -270,7 +270,7 @@ class LibraryScanner {
         const newLibraryItem = await LibraryItemScanner.scanNewLibraryItem(libraryItemData, libraryScan.library.settings, libraryScan)
         if (newLibraryItem) {
           newLibraryItems.push(newLibraryItem)
-          addedLibraryItems.push(newLibraryItem)
+          addedLibraryItemIds.push(newLibraryItem.id)
 
           libraryScan.resultsAdded++
         }
@@ -290,7 +290,7 @@ class LibraryScanner {
       }
     }
 
-    await this.autoMatchAddedLibraryItems(libraryScan, addedLibraryItems)
+    await this.autoMatchAddedLibraryItems(libraryScan, addedLibraryItemIds)
     if (this.shouldCancelScan(libraryScan)) return true
 
     // Author book count updates and empty authors/series cleanup after all items are processed
@@ -304,13 +304,19 @@ class LibraryScanner {
    * Quick match library items added by a library scan if the library has auto match enabled
    *
    * @param {LibraryScan} libraryScan
-   * @param {import('../models/LibraryItem')[]} addedLibraryItems
+   * @param {string[]} addedLibraryItemIds
    */
-  async autoMatchAddedLibraryItems(libraryScan, addedLibraryItems) {
-    if (!libraryScan.library.settings.autoMatchNewItems || !addedLibraryItems.length) return
+  async autoMatchAddedLibraryItems(libraryScan, addedLibraryItemIds) {
+    if (!libraryScan.library.settings.autoMatchNewItems || !addedLibraryItemIds.length) return
 
-    libraryScan.addLog(LogLevel.INFO, `Matching ${addedLibraryItems.length} new library items`)
-    await getScanner().matchLibraryItemsChunk(this.apiRouter, libraryScan.library, addedLibraryItems, libraryScan)
+    libraryScan.addLog(LogLevel.INFO, `Matching ${addedLibraryItemIds.length} new library items`)
+    for (const libraryItemId of addedLibraryItemIds) {
+      const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
+      if (libraryItem) {
+        await getScanner().matchLibraryItem(this.apiRouter, libraryScan.library, libraryItem)
+      }
+      if (this.cancelLibraryScan[libraryScan.libraryId]) return
+    }
   }
 
   /**
