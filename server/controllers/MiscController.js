@@ -12,6 +12,7 @@ const cron = require('../libs/nodeCron')
 const { isObject, getTitleIgnorePrefix } = require('../utils/index')
 const ServerSettings = require('../objects/settings/ServerSettings')
 const { sanitizeFilename } = require('../utils/fileUtils')
+const { getUploadLayout } = require('../utils/organizeTemplate')
 const { sanitize } = require('../utils/htmlSanitizer')
 
 const TaskManager = require('../managers/TaskManager')
@@ -72,12 +73,22 @@ class MiscController {
       return res.status(404).send('Folder not found')
     }
 
-    // Podcasts should only be one folder deep
-    const outputDirectoryParts = library.isPodcast ? [title] : [author, series, title]
-    // `.filter(Boolean)` to strip out all the potentially missing details (eg: `author`)
-    // before sanitizing all the directory parts to remove illegal chars and finally prepending
-    // the base folder path
-    const cleanedOutputDirectoryParts = outputDirectoryParts.filter(Boolean).map((part) => sanitizeFilename(part))
+    // Podcasts should only be one folder deep. Book folder and file names come from the library's organize templates
+    let outputDirectoryParts = [sanitizeFilename(title)]
+    let newFileNames = new Map()
+    if (!library.isPodcast) {
+      const layout = getUploadLayout(
+        library.librarySettings,
+        { title, author, series },
+        files.map((file) => file.name)
+      )
+      outputDirectoryParts = layout.folderSegments
+      newFileNames = layout.newNames
+    }
+    const cleanedOutputDirectoryParts = outputDirectoryParts.filter(Boolean)
+    if (!cleanedOutputDirectoryParts.length) {
+      return res.status(400).send('Invalid request body')
+    }
     const outputDirectory = Path.join(...[folder.path, ...cleanedOutputDirectoryParts])
 
     try {
@@ -90,7 +101,7 @@ class MiscController {
     Logger.info(`Uploading ${files.length} files to`, outputDirectory)
 
     for (const file of files) {
-      const path = Path.join(outputDirectory, sanitizeFilename(file.name))
+      const path = Path.join(outputDirectory, newFileNames.get(file.name) || sanitizeFilename(file.name))
 
       await file
         .mv(path)

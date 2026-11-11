@@ -34,6 +34,7 @@ const BackupManager = require('./managers/BackupManager')
 const PlaybackSessionManager = require('./managers/PlaybackSessionManager')
 const PodcastManager = require('./managers/PodcastManager')
 const AudioMetadataMangaer = require('./managers/AudioMetadataManager')
+const OrganizeManager = require('./managers/OrganizeManager')
 const RssFeedManager = require('./managers/RssFeedManager')
 const CronManager = require('./managers/CronManager')
 const ApiCacheManager = require('./managers/ApiCacheManager')
@@ -134,6 +135,7 @@ class Server {
     this.playbackSessionManager = new PlaybackSessionManager()
     this.podcastManager = new PodcastManager()
     this.audioMetadataManager = new AudioMetadataMangaer()
+    this.organizeManager = new OrganizeManager(this.playbackSessionManager)
     this.cronManager = new CronManager(this.podcastManager, this.playbackSessionManager)
     this.apiCacheManager = new ApiCacheManager()
     this.binaryManager = new BinaryManager()
@@ -219,6 +221,8 @@ class Server {
         LibraryScanner.scanFilesChanged(pendingFileUpdates, pendingTask)
       })
     }
+
+    await this.organizeManager.recoverInterrupted()
   }
 
   /**

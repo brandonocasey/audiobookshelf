@@ -9,6 +9,7 @@ const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilter
 const libraryItemFilters = require('../utils/queries/libraryItemFilters')
 const seriesFilters = require('../utils/queries/seriesFilters')
 const fileUtils = require('../utils/fileUtils')
+const { getTemplateSettingError } = require('../utils/organizeTemplate')
 const { createNewSortInstance } = require('../libs/fastSort')
 const naturalSort = createNewSortInstance({
   comparer: new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
@@ -96,6 +97,12 @@ class LibraryController {
               return res.status(400).send('Invalid request. Settings "metadataPrecedence" must be an array')
             }
             newLibraryPayload.settings[key] = [...req.body.settings[key]]
+          } else if (key === 'organizeFolderTemplate' || key === 'organizeFileTemplate') {
+            const templateError = getTemplateSettingError(key, req.body.settings[key])
+            if (templateError) {
+              return res.status(400).send(`Invalid request. Setting "${key}" is invalid: ${templateError}`)
+            }
+            newLibraryPayload.settings[key] = req.body.settings[key]
           } else if (key === 'autoScanCronExpression' || key === 'podcastSearchRegion') {
             if (!req.body.settings[key]) continue
             if (typeof req.body.settings[key] !== 'string') {
@@ -307,6 +314,7 @@ class LibraryController {
     let hasUpdates = false
     let hasUpdatedDisableWatcher = false
     let hasUpdatedScanCron = false
+    let hasUpdatedOrganizeTemplate = false
     if (req.body.settings) {
       for (const key in req.body.settings) {
         if (!Object.keys(defaultLibrarySettings).includes(key)) {
@@ -321,6 +329,18 @@ class LibraryController {
           if (JSON.stringify(req.body.settings[key]) !== JSON.stringify(updatedSettings[key])) {
             hasUpdates = true
             updatedSettings[key] = [...req.body.settings[key]]
+            Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
+          }
+        } else if (key === 'organizeFolderTemplate' || key === 'organizeFileTemplate') {
+          const templateError = getTemplateSettingError(key, req.body.settings[key])
+          if (templateError) {
+            Logger.error(`[LibraryController] Invalid request. Setting "${key}" is invalid: ${templateError}`)
+            return res.status(400).send(`Invalid request. Setting "${key}" is invalid: ${templateError}`)
+          }
+          if (req.body.settings[key] !== updatedSettings[key]) {
+            hasUpdates = true
+            hasUpdatedOrganizeTemplate = true
+            updatedSettings[key] = req.body.settings[key]
             Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
           }
         } else if (key === 'autoScanCronExpression' || key === 'podcastSearchRegion') {
@@ -504,6 +524,11 @@ class LibraryController {
         hasUpdates = true
         await req.library.save()
       }
+    }
+
+    if (hasUpdatedOrganizeTemplate) {
+      // Template change renames the whole library, whether or not auto organize is on
+      this.organizeManager.organizeLibrary(req.library.id)
     }
 
     if (hasUpdatedScanCron) {

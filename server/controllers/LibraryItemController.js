@@ -278,6 +278,10 @@ class LibraryItemController {
 
       Logger.debug(`[LibraryItemController] Updated library item media ${req.libraryItem.media.title}`)
       SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
+
+      if (await this.organizeManager.autoOrganizeItem(req.libraryItem.id)) {
+        req.libraryItem = await Database.libraryItemModel.getExpandedById(req.libraryItem.id)
+      }
     }
     res.json({
       updated: hasUpdates,
@@ -662,6 +666,7 @@ class LibraryItemController {
 
     let itemsUpdated = 0
 
+    const updatedLibraryItemIds = []
     const seriesIdsRemoved = []
     const authorIdsRemoved = []
 
@@ -714,6 +719,7 @@ class LibraryItemController {
 
         Logger.debug(`[LibraryItemController] Updated library item media "${libraryItem.media.title}"`)
         SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
+        updatedLibraryItemIds.push(libraryItem.id)
         itemsUpdated++
       }
     }
@@ -723,6 +729,10 @@ class LibraryItemController {
     }
     if (authorIdsRemoved.length) {
       await this.checkRemoveAuthorsWithNoBooks(authorIdsRemoved)
+    }
+
+    for (const libraryItemId of updatedLibraryItemIds) {
+      await this.organizeManager.autoOrganizeItem(libraryItemId)
     }
 
     res.json({

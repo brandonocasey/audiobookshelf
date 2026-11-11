@@ -51,6 +51,8 @@ class ApiRouter {
     this.podcastManager = Server.podcastManager
     /** @type {import('../managers/AudioMetadataManager')} */
     this.audioMetadataManager = Server.audioMetadataManager
+    /** @type {import('../managers/OrganizeManager')} */
+    this.organizeManager = Server.organizeManager
     /** @type {import('../managers/CronManager')} */
     this.cronManager = Server.cronManager
     /** @type {import('../managers/EmailManager')} */
@@ -304,6 +306,9 @@ class ApiRouter {
     this.router.delete('/tools/item/:id/encode-m4b', ToolsController.middleware.bind(this), ToolsController.cancelM4bEncode.bind(this))
     this.router.post('/tools/item/:id/embed-metadata', ToolsController.middleware.bind(this), ToolsController.embedAudioFileMetadata.bind(this))
     this.router.post('/tools/batch/embed-metadata', ToolsController.middleware.bind(this), ToolsController.batchEmbedMetadata.bind(this))
+    this.router.post('/tools/organize/example', ToolsController.middleware.bind(this), ToolsController.organizeExample.bind(this))
+    this.router.post('/tools/organize/preview', ToolsController.middleware.bind(this), ToolsController.previewOrganize.bind(this))
+    this.router.post('/tools/organize', ToolsController.middleware.bind(this), ToolsController.organize.bind(this))
 
     //
     // RSS Feed Routes (Admin and up)

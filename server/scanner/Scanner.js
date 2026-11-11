@@ -133,6 +133,10 @@ class Scanner {
       await libraryItem.saveMetadataFile()
 
       SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
+
+      if (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id)) {
+        libraryItem = await Database.libraryItemModel.getExpandedById(libraryItem.id)
+      }
     }
 
     return {
