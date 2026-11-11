@@ -101,6 +101,12 @@ class LibraryController {
               return res.status(400).send(`Invalid request. Settings "${key}" must be a string`)
             }
             newLibraryPayload.settings[key] = req.body.settings[key]
+          } else if (key === 'autoMatchMinConfidence') {
+            const settingError = getPercentSettingError(key, req.body.settings[key])
+            if (settingError) {
+              return res.status(400).send(settingError)
+            }
+            newLibraryPayload.settings[key] = req.body.settings[key]
           } else if (key === 'markAsFinishedPercentComplete' || key === 'markAsFinishedTimeRemaining') {
             if (req.body.settings[key] !== null && isNaN(req.body.settings[key])) {
               return res.status(400).send(`Invalid request. Setting "${key}" must be a number`)
@@ -324,6 +330,17 @@ class LibraryController {
           if (req.body.settings[key] !== updatedSettings[key]) {
             if (key === 'autoScanCronExpression') hasUpdatedScanCron = true
 
+            hasUpdates = true
+            updatedSettings[key] = req.body.settings[key]
+            Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
+          }
+        } else if (key === 'autoMatchMinConfidence') {
+          const settingError = getPercentSettingError(key, req.body.settings[key])
+          if (settingError) {
+            Logger.error(`[LibraryController] ${settingError}`)
+            return res.status(400).send(settingError)
+          }
+          if (req.body.settings[key] !== updatedSettings[key]) {
             hasUpdates = true
             updatedSettings[key] = req.body.settings[key]
             Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
@@ -1498,3 +1515,15 @@ class LibraryController {
   }
 }
 module.exports = new LibraryController()
+
+/**
+ * @param {string} key
+ * @param {*} value
+ * @returns {string|null} error message unless value is null or a number from 0 to 100
+ */
+function getPercentSettingError(key, value) {
+  if (value === null) return null
+  if (typeof value !== 'number' || isNaN(value)) return `Invalid request. Setting "${key}" must be a number`
+  if (value < 0 || value > 100) return `Invalid request. Setting "${key}" must be between 0 and 100`
+  return null
+}

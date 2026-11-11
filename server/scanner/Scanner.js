@@ -22,6 +22,7 @@ const TaskManager = require('../managers/TaskManager')
  * @property {string} [asin] - This override is currently unused in Abs clients
  * @property {boolean} [overrideCover]
  * @property {boolean} [overrideDetails]
+ * @property {number} [minConfidence] - Skip the match unless its confidence (0-1) is at least this
  */
 
 class Scanner {
@@ -59,6 +60,11 @@ class Scanner {
         }
       }
       const matchData = results[0]
+      if (isBelowMinConfidence(matchData.matchConfidence, options.minConfidence)) {
+        return {
+          warning: `${provider} match confidence ${matchData.matchConfidence ?? 'unknown'} is below minimum ${options.minConfidence}`
+        }
+      }
 
       // Update cover if not set OR overrideCover flag
       if (matchData.cover && (!libraryItem.media.coverPath || options.overrideCover)) {
@@ -429,9 +435,10 @@ class Scanner {
    * @param {import('../routers/ApiRouter')} apiRouterCtx
    * @param {import('../models/Library')} library
    * @param {import('../models/LibraryItem')} libraryItem
+   * @param {QuickMatchOptions} [options]
    * @returns {Promise<boolean>} true if library item was updated
    */
-  async matchLibraryItem(apiRouterCtx, library, libraryItem) {
+  async matchLibraryItem(apiRouterCtx, library, libraryItem, options = {}) {
     if (libraryItem.media.asin && library.settings.skipMatchingMediaWithAsin) {
       Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ASIN`)
       return false
@@ -444,7 +451,7 @@ class Scanner {
 
     let result
     try {
-      result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider })
+      result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { ...options, provider: library.provider })
     } catch (error) {
       Logger.error(`[Scanner] matchLibraryItems: Failed to match library item "${libraryItem.media.title}"`, error)
       return false
@@ -564,3 +571,19 @@ class Scanner {
   }
 }
 module.exports = new Scanner()
+
+/**
+ * Confidence scores are weighted sums, so a perfect match can come out as 0.9999999999999999
+ */
+const MATCH_CONFIDENCE_TOLERANCE = 1e-9
+
+/**
+ * @param {number} [matchConfidence] - 0-1, unset when the provider gives no confidence
+ * @param {number} [minConfidence] - 0-1, unset for no minimum
+ * @returns {boolean}
+ */
+function isBelowMinConfidence(matchConfidence, minConfidence) {
+  if (typeof minConfidence !== 'number') return false
+  if (typeof matchConfidence !== 'number') return true
+  return matchConfidence + MATCH_CONFIDENCE_TOLERANCE < minConfidence
+}

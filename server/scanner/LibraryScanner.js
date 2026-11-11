@@ -301,7 +301,7 @@ class LibraryScanner {
   }
 
   /**
-   * Quick match library items added by a library scan if the library has auto match enabled
+   * Quick match items added by a library scan when auto match is enabled
    *
    * @param {LibraryScan} libraryScan
    * @param {string[]} addedLibraryItemIds
@@ -313,14 +313,14 @@ class LibraryScanner {
     for (const libraryItemId of addedLibraryItemIds) {
       const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
       if (libraryItem) {
-        await getScanner().matchLibraryItem(this.apiRouter, libraryScan.library, libraryItem)
+        await this.autoMatchAddedLibraryItem(libraryScan.library, libraryItem)
       }
       if (this.cancelLibraryScan[libraryScan.libraryId]) return
     }
   }
 
   /**
-   * Quick match library item added by the watcher if the library has auto match enabled
+   * Quick match an item added by a scan when auto match is enabled
    *
    * @param {import('../models/Library')} library
    * @param {import('../models/LibraryItem')} libraryItem
@@ -328,7 +328,9 @@ class LibraryScanner {
   async autoMatchAddedLibraryItem(library, libraryItem) {
     if (!library.settings.autoMatchNewItems) return
 
-    await getScanner().matchLibraryItem(this.apiRouter, library, libraryItem)
+    const minConfidencePercent = library.settings.autoMatchMinConfidence
+    const options = typeof minConfidencePercent === 'number' ? { minConfidence: minConfidencePercent / 100 } : {}
+    await getScanner().matchLibraryItem(this.apiRouter, library, libraryItem, options)
   }
 
   shouldCancelScan(libraryScan) {

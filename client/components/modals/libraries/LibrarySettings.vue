@@ -52,6 +52,20 @@
       </div>
       <div v-if="isBookLibrary" class="p-2 w-full md:w-1/2">
         <div class="flex items-center">
+          <div class="w-16 relative">
+            <ui-text-input v-model="autoMatchMinConfidence" input-id="auto-match-min-confidence" type="number" no-spinner custom-input-class="pr-5" @input="formUpdated" />
+            <div class="absolute top-0 bottom-0 right-2 flex items-center">%</div>
+          </div>
+          <ui-tooltip :text="$strings.LabelSettingsAutoMatchMinConfidenceHelp">
+            <label for="auto-match-min-confidence" class="pl-4 text-sm">
+              {{ $strings.LabelSettingsAutoMatchMinConfidence }}
+              <span class="material-symbols icon-text text-sm">info</span>
+            </label>
+          </ui-tooltip>
+        </div>
+      </div>
+      <div v-if="isBookLibrary" class="p-2 w-full md:w-1/2">
+        <div class="flex items-center">
           <ui-toggle-switch v-model="hideSingleBookSeries" size="sm" @input="formUpdated" />
           <ui-tooltip :text="$strings.LabelSettingsHideSingleBookSeriesHelp">
             <p class="pl-4 text-sm">
@@ -120,6 +134,7 @@ export default {
       skipMatchingMediaWithAsin: false,
       skipMatchingMediaWithIsbn: false,
       autoMatchNewItems: false,
+      autoMatchMinConfidence: null,
       audiobooksOnly: false,
       epubsAllowScriptedContent: false,
       hideSingleBookSeries: false,
@@ -179,6 +194,7 @@ export default {
           skipMatchingMediaWithAsin: !!this.skipMatchingMediaWithAsin,
           skipMatchingMediaWithIsbn: !!this.skipMatchingMediaWithIsbn,
           autoMatchNewItems: !!this.autoMatchNewItems,
+          autoMatchMinConfidence: this.autoMatchMinConfidence === null || this.autoMatchMinConfidence === '' ? null : Number(this.autoMatchMinConfidence),
           audiobooksOnly: !!this.audiobooksOnly,
           epubsAllowScriptedContent: !!this.epubsAllowScriptedContent,
           hideSingleBookSeries: !!this.hideSingleBookSeries,
@@ -198,6 +214,7 @@ export default {
       this.skipMatchingMediaWithAsin = !!this.librarySettings.skipMatchingMediaWithAsin
       this.skipMatchingMediaWithIsbn = !!this.librarySettings.skipMatchingMediaWithIsbn
       this.autoMatchNewItems = !!this.librarySettings.autoMatchNewItems
+      this.autoMatchMinConfidence = this.librarySettings.autoMatchMinConfidence ?? null
       this.audiobooksOnly = !!this.librarySettings.audiobooksOnly
       this.epubsAllowScriptedContent = !!this.librarySettings.epubsAllowScriptedContent
       this.hideSingleBookSeries = !!this.librarySettings.hideSingleBookSeries

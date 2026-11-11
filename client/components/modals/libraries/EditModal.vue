@@ -125,6 +125,7 @@ export default {
           skipMatchingMediaWithAsin: false,
           skipMatchingMediaWithIsbn: false,
           autoMatchNewItems: false,
+          autoMatchMinConfidence: null,
           autoScanCronExpression: null,
           hideSingleBookSeries: false,
           onlyShowLaterBooksInContinueSeries: false,

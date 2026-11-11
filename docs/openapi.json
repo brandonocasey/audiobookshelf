@@ -2836,6 +2836,12 @@
             "type": "boolean",
             "example": false
           },
+          "autoMatchMinConfidence": {
+            "description": "Minimum match confidence percent for auto matches. Results without a confidence are skipped. Null means no minimum.",
+            "type": "number",
+            "nullable": true,
+            "example": 90
+          },
           "autoScanCronExpression": {
             "description": "The cron expression for when to automatically scan the library folders. If null, automatic scanning will be disabled.",
             "type": "string",

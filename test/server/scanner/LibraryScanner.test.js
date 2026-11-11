@@ -122,6 +122,30 @@ describe('LibraryScanner auto match new items', () => {
       expect((await Database.libraryModel.findByPk(library.id)).lastScan).to.exist
     })
 
+    describe('minimum confidence', () => {
+      const cases = [
+        { name: 'matches when confidence is above the minimum', minConfidence: 90, matchConfidence: 0.95, expectedIsbn: matchedIsbn },
+        { name: 'matches when confidence equals the minimum', minConfidence: 90, matchConfidence: 0.9, expectedIsbn: matchedIsbn },
+        { name: 'skips when confidence is below the minimum', minConfidence: 90, matchConfidence: 0.89, expectedIsbn: null },
+        { name: 'skips results without a confidence when a minimum is set', minConfidence: 90, matchConfidence: undefined, expectedIsbn: null },
+        { name: 'skips results without a confidence when the minimum is 0', minConfidence: 0, matchConfidence: undefined, expectedIsbn: null },
+        { name: 'matches a perfect score with float error at a 100 minimum', minConfidence: 100, matchConfidence: 0.9999999999999999, expectedIsbn: matchedIsbn },
+        { name: 'matches results without a confidence when no minimum is set', minConfidence: null, matchConfidence: undefined, expectedIsbn: matchedIsbn }
+      ]
+      cases.forEach(({ name, minConfidence, matchConfidence, expectedIsbn }) => {
+        it(name, async () => {
+          BookFinder.search.resolves([{ title: 'Matched Title', isbn: matchedIsbn, matchConfidence }])
+          library.settings = { ...library.settings, autoMatchNewItems: true, autoMatchMinConfidence: minConfidence }
+          await library.save()
+          addBookFolder('Some Author/New Book')
+
+          await runLibraryScan()
+
+          expect(await getIsbnByTitle('New Book')).to.equal(expectedIsbn)
+        })
+      })
+    })
+
     it('does not match books that existed before the scan', async () => {
       addBookFolder('Some Author/Existing Book')
       await runLibraryScan()

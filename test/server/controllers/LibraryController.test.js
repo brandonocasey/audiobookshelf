@@ -176,3 +176,65 @@ describe('LibraryController.downloadMultiple', () => {
     expect(pathObjects[0].path).to.equal('/test-lib/allowed')
   })
 })
+
+describe('LibraryController.update autoMatchMinConfidence', () => {
+  let library
+
+  beforeEach(async () => {
+    global.ServerSettings = {}
+    Database.sequelize = new Sequelize({ dialect: 'sqlite', storage: ':memory:', logging: false })
+    Database.sequelize.uppercaseFirst = (str) => (str ? `${str[0].toUpperCase()}${str.substr(1)}` : '')
+    await Database.buildModels()
+    sinon.stub(Logger, 'error')
+    sinon.stub(Logger, 'debug')
+
+    const created = await Database.libraryModel.create({ name: 'Test Library', mediaType: 'book', settings: Database.libraryModel.getDefaultLibrarySettingsForMediaType('book') })
+    library = await Database.libraryModel.findByIdWithFolders(created.id)
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  async function updateMinConfidence(value) {
+    const res = { statusCode: 200, body: null }
+    res.status = (code) => {
+      res.statusCode = code
+      return res
+    }
+    res.send = (body) => {
+      res.body = body
+      return res
+    }
+    res.json = (body) => {
+      res.body = body
+      return res
+    }
+    const req = { user: { isAdminOrUp: true }, library, body: { settings: { autoMatchMinConfidence: value } } }
+    await LibraryController.update.call({}, req, res)
+    return res
+  }
+
+  const cases = [
+    { value: 90, expectedStatus: 200, expectedSetting: 90 },
+    { value: 0, expectedStatus: 200, expectedSetting: 0 },
+    { value: 100, expectedStatus: 200, expectedSetting: 100 },
+    { value: null, expectedStatus: 200, expectedSetting: null },
+    { value: 101, expectedStatus: 400, expectedSetting: null },
+    { value: -1, expectedStatus: 400, expectedSetting: null },
+    { value: 'abc', expectedStatus: 400, expectedSetting: null },
+    { value: '', expectedStatus: 400, expectedSetting: null },
+    { value: '50', expectedStatus: 400, expectedSetting: null },
+    { value: true, expectedStatus: 400, expectedSetting: null },
+    { value: [50], expectedStatus: 400, expectedSetting: null }
+  ]
+  cases.forEach(({ value, expectedStatus, expectedSetting }) => {
+    it(`returns ${expectedStatus} for ${JSON.stringify(value)}`, async () => {
+      const res = await updateMinConfidence(value)
+
+      expect(res.statusCode).to.equal(expectedStatus)
+      const stored = await Database.libraryModel.findByPk(library.id)
+      expect(stored.settings.autoMatchMinConfidence).to.equal(expectedSetting)
+    })
+  })
+})
