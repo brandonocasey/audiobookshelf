@@ -11,6 +11,7 @@ const { filePathToPOSIX, isSameOrSubPath } = require('../utils/fileUtils')
 const { buildPlan, planToClientJSON } = require('../utils/organizePlan')
 
 const PREVIEW_CHUNK_SIZE = 50
+const MAX_REPORTED_RESULTS = 100
 
 /**
  * @typedef OrganizeResult
@@ -220,16 +221,37 @@ class OrganizeManager {
    */
   async runTask(task, libraryItemIds, planHashes) {
     const counts = { moved: 0, unchanged: 0, skipped: 0, failed: 0 }
+    /** @type {OrganizeResult[]} */
+    const problems = []
     for (const libraryItemId of libraryItemIds) {
       const result = await this.organizeItem(libraryItemId, planHashes?.[libraryItemId])
       counts[result.status]++
       if (result.status === 'skipped' || result.status === 'failed') {
         Logger.warn(`[OrganizeManager] Library item "${libraryItemId}" ${result.status}: ${result.reason || result.error}`)
+        if (problems.length < MAX_REPORTED_RESULTS) problems.push(result)
       }
     }
+    task.data.results = await this.addTitlesToResults(problems)
     const resultSubs = [counts.moved, counts.skipped, counts.failed].map(String)
     task.setFinished({ text: `Moved ${resultSubs[0]}, skipped ${resultSubs[1]}, failed ${resultSubs[2]}`, key: 'MessageTaskOrganizeResult', subs: resultSubs })
     TaskManager.taskFinished(task)
+  }
+
+  /**
+   * Titles are for display only, so a failed lookup leaves them out
+   *
+   * @param {OrganizeResult[]} results
+   * @returns {Promise<(OrganizeResult & {title:string|null})[]>}
+   */
+  async addTitlesToResults(results) {
+    let titles = new Map()
+    try {
+      const libraryItems = results.length ? await Database.libraryItemModel.findAllExpandedWhere({ id: results.map((result) => result.itemId) }) : []
+      titles = new Map(libraryItems.map((libraryItem) => [libraryItem.id, libraryItem.media.title]))
+    } catch (error) {
+      Logger.warn('[OrganizeManager] Failed to look up the titles of items that were not organized', error)
+    }
+    return results.map((result) => ({ ...result, title: titles.get(result.itemId) || null }))
   }
 
   /**
@@ -282,7 +304,7 @@ class OrganizeManager {
    */
   async writeJournal(journal) {
     const journalPath = this.getJournalPath(journal.libraryItemId)
-    await fs.mkdir(this.journalDirectory, { recursive: true })
+    await fs.ensureDir(this.journalDirectory)
     await fs.writeFile(`${journalPath}.tmp`, JSON.stringify(journal, null, 2))
     await fs.rename(`${journalPath}.tmp`, journalPath)
   }

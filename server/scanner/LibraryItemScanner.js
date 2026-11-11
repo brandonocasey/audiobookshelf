@@ -23,8 +23,8 @@ class LibraryItemScanner {
    * Scan single library item
    *
    * @param {string} libraryItemId
-   * @param {{relPath:string, path:string}} [updateLibraryItemDetails] used by watcher when item folder was renamed
-   * @returns {number} ScanResult
+   * @param {{relPath:string, path:string, libraryFolderId?:string, isFile?:boolean}} [updateLibraryItemDetails] used when the item folder was renamed or moved
+   * @returns {Promise<number>} ScanResult
    */
   async scanLibraryItem(libraryItemId, updateLibraryItemDetails = null) {
     // TODO: Add task manager

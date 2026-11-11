@@ -182,7 +182,7 @@ async function hasFileNameConflict(moves) {
 }
 
 /**
- * Paths relative to the item folder for display (the file name for a single-file item)
+ * Paths relative to the item folder for display (the file name for a single-file item), without renames that change nothing
  *
  * @param {OrganizeMove[]} moves
  * @param {string} fromPath
@@ -191,10 +191,12 @@ async function hasFileNameConflict(moves) {
  * @returns {{from:string, to:string}[]}
  */
 function getDisplayRenames(moves, fromPath, toPath, isFile) {
-  return moves.map((move) => ({
-    from: isFile ? Path.posix.basename(move.from) : Path.posix.relative(fromPath, move.from),
-    to: isFile ? Path.posix.relative(toPath, move.to) : Path.posix.relative(fromPath, move.to)
-  }))
+  return moves
+    .map((move) => ({
+      from: isFile ? Path.posix.basename(move.from) : Path.posix.relative(fromPath, move.from),
+      to: isFile ? Path.posix.relative(toPath, move.to) : Path.posix.relative(fromPath, move.to)
+    }))
+    .filter((rename) => rename.from !== rename.to)
 }
 
 /**
@@ -288,8 +290,8 @@ async function buildPlan(libraryItem, library) {
  * @returns {Object} Plan fields the client needs
  */
 function planToClientJSON(plan) {
-  const { itemId, title, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash } = plan
-  return { itemId, title, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
+  const { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash } = plan
+  return { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
 }
 
 module.exports = { buildPlan, planToClientJSON }

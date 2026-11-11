@@ -209,6 +209,47 @@ describe('OrganizeManager', () => {
       })
     }
 
+    it('numbers the tracks by the stored audio file index, not the order they are stored in', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3', 'c.mp3'], { title: 'Book', authors: ['Writer'] })
+      const book = (await loadItem(libraryItemId)).media
+      book.audioFiles = [...book.audioFiles].sort((x, y) => y.index - x.index)
+      book.changed('audioFiles', true)
+      await book.save()
+
+      await manager.organizeItem(libraryItemId)
+
+      const contentByName = Object.fromEntries(listFiles(rel('Writer', 'Book')).map((name) => [name, fs.readFileSync(rel('Writer', 'Book', name), 'utf8')]))
+      expect(contentByName).to.deep.equal({ 'Book - Part 1.mp3': 'a.mp3', 'Book - Part 2.mp3': 'b.mp3', 'Book - Part 3.mp3': 'c.mp3' })
+    })
+
+    it('fills {disc} from the embedded disc number, then the one in the file name, and keeps disc 0', async () => {
+      await library.update({ settings: { ...library.settings, organizeFileTemplate: '{title}< - Disc {disc}> - {track}' } })
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3', 'c.mp3'], { title: 'Book', authors: ['Writer'] })
+      const book = (await loadItem(libraryItemId)).media
+      const discs = [
+        { discNumFromMeta: 2, discNumFromFilename: 7 },
+        { discNumFromMeta: null, discNumFromFilename: 0 },
+        { discNumFromMeta: null, discNumFromFilename: null }
+      ]
+      book.audioFiles = [...book.audioFiles].sort((x, y) => x.index - y.index).map((audioFile, i) => ({ ...audioFile, ...discs[i] }))
+      book.changed('audioFiles', true)
+      await book.save()
+
+      await manager.organizeItem(libraryItemId)
+
+      expect(listFiles(rel('Writer', 'Book'))).to.deep.equal(['Book - 3.mp3', 'Book - Disc 0 - 2.mp3', 'Book - Disc 2 - 1.mp3'])
+    })
+
+    it('has the file watcher ignore the old and the new folder while it works', async () => {
+      const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+
+      await manager.organizeItem(libraryItemId)
+
+      for (const stub of [Watcher.addIgnoreDir, Watcher.removeIgnoreDir]) {
+        expect(stub.getCalls().map((call) => call.args[0])).to.have.members([rel('Raw'), rel('Writer', 'Book')])
+      }
+    })
+
     it('moves a single-file item into a folder and puts its cover and metadata next to it when stored with the item', async () => {
       const libraryItemId = await addSingleFileBook('Loose Book.m4b', { title: 'Loose Book', authors: ['Some Author'] })
       const metadataFolder = path.join(global.MetadataPath, 'items', libraryItemId)
@@ -371,6 +412,44 @@ describe('OrganizeManager', () => {
       expect(fs.readFileSync(rel('Raw', 'a.mp3'), 'utf8')).to.equal('a.mp3')
     })
 
+    it('removes the partial copy a move interrupted across file systems left behind', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+      const realMove = fsExtra.move
+      sinon.stub(fsExtra, 'move').callsFake(async (from, to) => {
+        if (!to.endsWith('Book - Part 2.mp3')) return realMove(from, to)
+        fs.writeFileSync(to, 'partial')
+        throw new Error('disk full')
+      })
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'failed', error: 'disk full' })
+      expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.mp3', 'Raw/b.mp3'])
+    })
+
+    it('rescans the item at its original path when the failure comes after the rescan started', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3', 'cover.jpg'], { title: 'Book', authors: ['Writer'] })
+      const realScan = LibraryItemScanner.scanLibraryItem.bind(LibraryItemScanner)
+      sinon
+        .stub(LibraryItemScanner, 'scanLibraryItem')
+        .onFirstCall()
+        .callsFake(async (...args) => {
+          await realScan(...args)
+          throw new Error('failed after the rescan')
+        })
+        .callsFake(realScan)
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'failed', error: 'failed after the rescan' })
+      expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.mp3', 'Raw/b.mp3', 'Raw/cover.jpg'])
+      const after = await loadItem(libraryItemId)
+      expect(after.path).to.equal(rel('Raw'))
+      expect(after.relPath).to.equal('Raw')
+      expect(after.media.coverPath).to.equal(rel('Raw', 'cover.jpg'))
+      expect(after.media.audioFiles.every((audioFile) => audioFile.metadata.path.startsWith(rel('Raw')))).to.be.true
+    })
+
     it('removes the folders it created when it fails, but not the ones that already existed', async () => {
       fs.mkdirSync(rel('Writer'))
       const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
@@ -443,11 +522,21 @@ describe('OrganizeManager', () => {
       expect(preview.unchangedCount).to.equal(1)
       expect(preview.plans).to.have.length(1)
       const [plan] = preview.plans
-      expect(plan).to.include({ itemId: toMove, title: 'Foo: Bar', fromRelPath: 'Raw', toRelPath: 'Writer/Foo - Bar', skipReason: null, changed: true })
+      expect(plan).to.include({ itemId: toMove, title: 'Foo: Bar', fromPath: rel('Raw'), toPath: rel('Writer', 'Foo - Bar'), fromRelPath: 'Raw', toRelPath: 'Writer/Foo - Bar', skipReason: null, changed: true })
       expect(plan.fileRenames).to.deep.equal([{ from: 'a.m4b', to: 'Foo - Bar.m4b' }])
       expect(plan.warnings).to.deep.equal([{ field: 'title', expected: 'Foo: Bar', parsed: 'Foo - Bar' }])
       expect(plan.hash).to.be.a('string')
       expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+    })
+
+    it('does not list the file of a single-file item as renamed when it keeps its name', async () => {
+      const libraryItemId = await addSingleFileBook('Loose.m4b', { title: 'Loose', authors: ['Writer'] })
+
+      const { plans } = await manager.previewItems([libraryItemId])
+
+      expect(plans).to.have.length(1)
+      expect(plans[0]).to.include({ toRelPath: 'Writer/Loose', changed: true })
+      expect(plans[0].fileRenames).to.deep.equal([])
     })
 
     it('skips an item whose plan changed since the preview', async () => {
@@ -477,9 +566,26 @@ describe('OrganizeManager', () => {
       expect(task.isFinished).to.be.true
       expect(task.descriptionKey).to.equal('MessageTaskOrganizeResult')
       expect(task.descriptionSubs).to.deep.equal(['1', '1', '1'])
+      expect(task.data.results).to.deep.equal([
+        { itemId: first, title: 'One', status: 'failed', error: 'scan exploded' },
+        { itemId: third, title: 'Three', status: 'skipped', reason: 'targetExists' }
+      ])
       expect(fs.existsSync(rel('Raw 1', 'a.m4b'))).to.be.true
       expect(fs.existsSync(rel('Writer', 'Two', 'Two.m4b'))).to.be.true
       expect(fs.existsSync(rel('Raw 3', 'c.m4b'))).to.be.true
+    })
+  })
+
+  describe('task results', () => {
+    it('lists at most 100 items that were not organized, while the counts cover all of them', async () => {
+      const missingIds = Array.from({ length: 105 }, (_, i) => `li_missing_${i}`)
+      const task = TaskManager.createAndAddTask('organize-files', { text: 'Organizing files' }, null, true)
+
+      await manager.runTask(task, missingIds, null)
+
+      expect(task.descriptionSubs).to.deep.equal(['0', '105', '0'])
+      expect(task.data.results).to.have.length(100)
+      expect(task.data.results[0]).to.deep.equal({ itemId: 'li_missing_0', title: null, status: 'skipped', reason: 'missing' })
     })
   })
 
@@ -614,6 +720,18 @@ describe('OrganizeManager', () => {
         expect(res.statusCode, JSON.stringify(settings)).to.equal(400)
         expect(res.body).to.include('is invalid')
       }
+    })
+
+    it('rejects invalid templates when a library is created', async () => {
+      const invalidTemplates = [{ organizeFolderTemplate: '{author}/{unknown}' }, { organizeFileTemplate: '{title}/{track}' }]
+      for (const settings of invalidTemplates) {
+        const res = makeRes()
+        const req = { user: adminUser, body: { name: 'New', folders: [{ path: path.join(tmpDir, 'new') }], settings } }
+        await LibraryController.create.call({}, req, res)
+        expect(res.statusCode, JSON.stringify(settings)).to.equal(400)
+        expect(res.body).to.include('is invalid')
+      }
+      expect(await Database.libraryModel.count()).to.equal(1)
     })
 
     it('starts organizing the whole library when a template changes, and only then', async () => {
