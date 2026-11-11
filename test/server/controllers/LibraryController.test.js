@@ -270,15 +270,16 @@ describe('LibraryController.create auto match settings', () => {
   }
 
   const cases = [
-    { name: 'a provider outside the Audible list', settings: { autoMatchProvider: 'google' } },
-    { name: 'a minimum above 100', settings: { autoMatchMinConfidence: 101 } },
-    { name: 'a setting key named after an Object prototype member', settings: JSON.parse('{"__proto__":1}') }
+    { name: 'a provider outside the Audible list', settings: { autoMatchProvider: 'google' }, expectedError: 'Setting "autoMatchProvider" must be one of audible,' },
+    { name: 'a minimum above 100', settings: { autoMatchMinConfidence: 101 }, expectedError: 'Setting "autoMatchMinConfidence" must be between 0 and 100' },
+    { name: 'a setting key named after an Object prototype member', settings: JSON.parse('{"__proto__":1}'), expectedError: 'Setting "__proto__" must be of type object' }
   ]
-  cases.forEach(({ name, settings }) => {
+  cases.forEach(({ name, settings, expectedError }) => {
     it(`returns 400 for ${name}`, async () => {
       const res = await createWithSettings(settings)
 
       expect(res.statusCode).to.equal(400)
+      expect(res.body).to.include(expectedError)
       expect(await Database.libraryModel.count()).to.equal(0)
     })
   })

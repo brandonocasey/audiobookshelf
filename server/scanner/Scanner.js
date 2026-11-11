@@ -578,6 +578,16 @@ module.exports = new Scanner()
 const MATCH_CONFIDENCE_TOLERANCE = 1e-9
 
 /**
+ * Skip warnings show the match confidence to 2 decimal places of a percent
+ */
+const MATCH_CONFIDENCE_PERCENT_SCALE = 100
+
+/**
+ * Shows any entered minimum in full while dropping float error from dividing it by 100
+ */
+const MIN_CONFIDENCE_SIGNIFICANT_DIGITS = 12
+
+/**
  * @param {number} [matchConfidence] - 0-1, unset when the provider gives no confidence
  * @param {number} [minConfidence] - 0-1, unset for no minimum
  * @returns {boolean}
@@ -596,7 +606,7 @@ function isBelowMinConfidence(matchConfidence, minConfidence) {
  */
 function formatMatchConfidence(matchConfidence) {
   if (typeof matchConfidence !== 'number') return 'unknown'
-  return `${Math.floor(matchConfidence * 10000 + MATCH_CONFIDENCE_TOLERANCE) / 100}%`
+  return `${Math.floor(matchConfidence * 100 * MATCH_CONFIDENCE_PERCENT_SCALE + MATCH_CONFIDENCE_TOLERANCE) / MATCH_CONFIDENCE_PERCENT_SCALE}%`
 }
 
 /**
@@ -604,5 +614,5 @@ function formatMatchConfidence(matchConfidence) {
  * @returns {string}
  */
 function formatMinConfidence(minConfidence) {
-  return `${Math.round(minConfidence * 1e8) / 1e6}%`
+  return `${Number((minConfidence * 100).toPrecision(MIN_CONFIDENCE_SIGNIFICANT_DIGITS))}%`
 }

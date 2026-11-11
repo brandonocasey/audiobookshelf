@@ -159,7 +159,8 @@ describe('LibraryScanner auto match new items', () => {
       const warningCases = [
         { name: 'warns with percents when skipping a match', minConfidence: 90, matchConfidence: 0.37, expectedWarning: 'audible match confidence 37% is below minimum 90%' },
         { name: 'warns below the minimum when the confidence rounds up to it', minConfidence: 90, matchConfidence: 0.89996, expectedWarning: 'audible match confidence 89.99% is below minimum 90%' },
-        { name: 'warns with an unknown confidence', minConfidence: 37.5, matchConfidence: undefined, expectedWarning: 'audible match confidence unknown is below minimum 37.5%' }
+        { name: 'warns with an unknown confidence', minConfidence: 37.5, matchConfidence: undefined, expectedWarning: 'audible match confidence unknown is below minimum 37.5%' },
+        { name: 'warns with the minimum as entered', minConfidence: 37.0000004, matchConfidence: 0.37, expectedWarning: 'audible match confidence 37% is below minimum 37.0000004%' }
       ]
       warningCases.forEach(({ name, minConfidence, matchConfidence, expectedWarning }) => {
         it(name, async () => {
