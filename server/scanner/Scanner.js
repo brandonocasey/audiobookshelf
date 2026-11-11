@@ -62,7 +62,7 @@ class Scanner {
       const matchData = results[0]
       if (isBelowMinConfidence(matchData.matchConfidence, options.minConfidence)) {
         return {
-          warning: `${provider} match confidence ${matchData.matchConfidence ?? 'unknown'} is below minimum ${options.minConfidence}`
+          warning: `${provider} match confidence ${formatConfidencePercent(matchData.matchConfidence)} is below minimum ${formatConfidencePercent(options.minConfidence)}`
         }
       }
 
@@ -430,7 +430,7 @@ class Scanner {
   }
 
   /**
-   * Quick match library item with the library provider unless the library skip settings apply
+   * Quick match library item unless the library skip settings apply. options.provider overrides the library provider.
    *
    * @param {import('../routers/ApiRouter')} apiRouterCtx
    * @param {import('../models/Library')} library
@@ -586,4 +586,13 @@ function isBelowMinConfidence(matchConfidence, minConfidence) {
   if (typeof minConfidence !== 'number') return false
   if (typeof matchConfidence !== 'number') return true
   return matchConfidence + MATCH_CONFIDENCE_TOLERANCE < minConfidence
+}
+
+/**
+ * @param {number} [confidence] - 0-1
+ * @returns {string}
+ */
+function formatConfidencePercent(confidence) {
+  if (typeof confidence !== 'number') return 'unknown'
+  return `${Math.round(confidence * 1000) / 10}%`
 }
