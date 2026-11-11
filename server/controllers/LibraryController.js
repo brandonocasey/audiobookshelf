@@ -102,7 +102,7 @@ class LibraryController {
               return res.status(400).send(`Invalid request. Settings "${key}" must be a string`)
             }
             newLibraryPayload.settings[key] = req.body.settings[key]
-          } else if (settingValidators[key]) {
+          } else if (Object.hasOwn(settingValidators, key)) {
             const settingError = settingValidators[key](key, req.body.settings[key])
             if (settingError) {
               return res.status(400).send(settingError)
@@ -335,7 +335,7 @@ class LibraryController {
             updatedSettings[key] = req.body.settings[key]
             Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
           }
-        } else if (settingValidators[key]) {
+        } else if (Object.hasOwn(settingValidators, key)) {
           const settingError = settingValidators[key](key, req.body.settings[key])
           if (settingError) {
             Logger.error(`[LibraryController] ${settingError}`)

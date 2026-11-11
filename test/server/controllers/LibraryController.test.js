@@ -241,3 +241,45 @@ describe('LibraryController.update auto match settings', () => {
     })
   })
 })
+
+describe('LibraryController.create auto match settings', () => {
+  beforeEach(async () => {
+    Database.sequelize = new Sequelize({ dialect: 'sqlite', storage: ':memory:', logging: false })
+    Database.sequelize.uppercaseFirst = (str) => (str ? `${str[0].toUpperCase()}${str.substr(1)}` : '')
+    await Database.buildModels()
+    sinon.stub(Logger, 'error')
+  })
+
+  afterEach(() => {
+    sinon.restore()
+  })
+
+  async function createWithSettings(settings) {
+    const res = { statusCode: 200, body: null }
+    res.status = (code) => {
+      res.statusCode = code
+      return res
+    }
+    res.send = (body) => {
+      res.body = body
+      return res
+    }
+    const req = { user: { isAdminOrUp: true }, body: { name: 'New Library', folders: [{ path: '/new-lib' }], settings } }
+    await LibraryController.create.call({}, req, res)
+    return res
+  }
+
+  const cases = [
+    { name: 'a provider outside the Audible list', settings: { autoMatchProvider: 'google' } },
+    { name: 'a minimum above 100', settings: { autoMatchMinConfidence: 101 } },
+    { name: 'a setting key named after an Object prototype member', settings: JSON.parse('{"__proto__":1}') }
+  ]
+  cases.forEach(({ name, settings }) => {
+    it(`returns 400 for ${name}`, async () => {
+      const res = await createWithSettings(settings)
+
+      expect(res.statusCode).to.equal(400)
+      expect(await Database.libraryModel.count()).to.equal(0)
+    })
+  })
+})
