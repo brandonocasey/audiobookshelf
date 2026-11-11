@@ -16,6 +16,7 @@ const naturalSort = createNewSortInstance({
 
 const LibraryScanner = require('../scanner/LibraryScanner')
 const Scanner = require('../scanner/Scanner')
+const BookFinder = require('../finders/BookFinder')
 const Database = require('../Database')
 const Watcher = require('../Watcher')
 const RssFeedManager = require('../managers/RssFeedManager')
@@ -101,8 +102,8 @@ class LibraryController {
               return res.status(400).send(`Invalid request. Settings "${key}" must be a string`)
             }
             newLibraryPayload.settings[key] = req.body.settings[key]
-          } else if (key === 'autoMatchMinConfidence') {
-            const settingError = getPercentSettingError(key, req.body.settings[key])
+          } else if (settingValidators[key]) {
+            const settingError = settingValidators[key](key, req.body.settings[key])
             if (settingError) {
               return res.status(400).send(settingError)
             }
@@ -334,8 +335,8 @@ class LibraryController {
             updatedSettings[key] = req.body.settings[key]
             Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
           }
-        } else if (key === 'autoMatchMinConfidence') {
-          const settingError = getPercentSettingError(key, req.body.settings[key])
+        } else if (settingValidators[key]) {
+          const settingError = settingValidators[key](key, req.body.settings[key])
           if (settingError) {
             Logger.error(`[LibraryController] ${settingError}`)
             return res.status(400).send(settingError)
@@ -1516,6 +1517,18 @@ class LibraryController {
 }
 module.exports = new LibraryController()
 
+const AUTO_MATCH_PROVIDERS = BookFinder.providers.filter((provider) => provider.startsWith('audible'))
+
+/**
+ * @param {string} key
+ * @param {*} value
+ * @returns {string|null} error message unless value is an Audible provider
+ */
+function getAutoMatchProviderError(key, value) {
+  if (AUTO_MATCH_PROVIDERS.includes(value)) return null
+  return `Invalid request. Setting "${key}" must be one of ${AUTO_MATCH_PROVIDERS.join(', ')}`
+}
+
 /**
  * @param {string} key
  * @param {*} value
@@ -1526,4 +1539,14 @@ function getPercentSettingError(key, value) {
   if (typeof value !== 'number' || isNaN(value)) return `Invalid request. Setting "${key}" must be a number`
   if (value < 0 || value > 100) return `Invalid request. Setting "${key}" must be between 0 and 100`
   return null
+}
+
+/**
+ * Library settings validated by a function that returns an error message or null
+ *
+ * @type {Record<string, (key: string, value: *) => string|null>}
+ */
+const settingValidators = {
+  autoMatchProvider: getAutoMatchProviderError,
+  autoMatchMinConfidence: getPercentSettingError
 }

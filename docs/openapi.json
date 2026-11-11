@@ -2832,9 +2832,26 @@
             "example": false
           },
           "autoMatchNewItems": {
-            "description": "Whether to quick match books that scans or the watcher add, using the library provider.",
+            "description": "Whether to quick match books that scans or the watcher add, using autoMatchProvider.",
             "type": "boolean",
             "example": false
+          },
+          "autoMatchProvider": {
+            "description": "The Audible provider used for auto matches.",
+            "type": "string",
+            "enum": [
+              "audible",
+              "audible.ca",
+              "audible.uk",
+              "audible.au",
+              "audible.fr",
+              "audible.de",
+              "audible.jp",
+              "audible.it",
+              "audible.in",
+              "audible.es"
+            ],
+            "example": "audible"
           },
           "autoMatchMinConfidence": {
             "description": "Minimum match confidence percent for auto matches. Results without a confidence are skipped. Null means no minimum.",

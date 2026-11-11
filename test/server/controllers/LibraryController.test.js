@@ -177,7 +177,7 @@ describe('LibraryController.downloadMultiple', () => {
   })
 })
 
-describe('LibraryController.update autoMatchMinConfidence', () => {
+describe('LibraryController.update auto match settings', () => {
   let library
 
   beforeEach(async () => {
@@ -196,7 +196,7 @@ describe('LibraryController.update autoMatchMinConfidence', () => {
     sinon.restore()
   })
 
-  async function updateMinConfidence(value) {
+  async function updateSetting(key, value) {
     const res = { statusCode: 200, body: null }
     res.status = (code) => {
       res.statusCode = code
@@ -210,31 +210,34 @@ describe('LibraryController.update autoMatchMinConfidence', () => {
       res.body = body
       return res
     }
-    const req = { user: { isAdminOrUp: true }, library, body: { settings: { autoMatchMinConfidence: value } } }
+    const req = { user: { isAdminOrUp: true }, library, body: { settings: { [key]: value } } }
     await LibraryController.update.call({}, req, res)
     return res
   }
 
   const cases = [
-    { value: 90, expectedStatus: 200, expectedSetting: 90 },
-    { value: 0, expectedStatus: 200, expectedSetting: 0 },
-    { value: 100, expectedStatus: 200, expectedSetting: 100 },
-    { value: null, expectedStatus: 200, expectedSetting: null },
-    { value: 101, expectedStatus: 400, expectedSetting: null },
-    { value: -1, expectedStatus: 400, expectedSetting: null },
-    { value: 'abc', expectedStatus: 400, expectedSetting: null },
-    { value: '', expectedStatus: 400, expectedSetting: null },
-    { value: '50', expectedStatus: 400, expectedSetting: null },
-    { value: true, expectedStatus: 400, expectedSetting: null },
-    { value: [50], expectedStatus: 400, expectedSetting: null }
+    { key: 'autoMatchMinConfidence', value: 90, expectedStatus: 200, expectedSetting: 90 },
+    { key: 'autoMatchMinConfidence', value: 0, expectedStatus: 200, expectedSetting: 0 },
+    { key: 'autoMatchMinConfidence', value: 100, expectedStatus: 200, expectedSetting: 100 },
+    { key: 'autoMatchMinConfidence', value: null, expectedStatus: 200, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: 101, expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: -1, expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: 'abc', expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: '', expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: '50', expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: true, expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchMinConfidence', value: [50], expectedStatus: 400, expectedSetting: null },
+    { key: 'autoMatchProvider', value: 'audible.ca', expectedStatus: 200, expectedSetting: 'audible.ca' },
+    { key: 'autoMatchProvider', value: 'google', expectedStatus: 400, expectedSetting: 'audible' },
+    { key: 'autoMatchProvider', value: 'custom-test', expectedStatus: 400, expectedSetting: 'audible' }
   ]
-  cases.forEach(({ value, expectedStatus, expectedSetting }) => {
-    it(`returns ${expectedStatus} for ${JSON.stringify(value)}`, async () => {
-      const res = await updateMinConfidence(value)
+  cases.forEach(({ key, value, expectedStatus, expectedSetting }) => {
+    it(`returns ${expectedStatus} for ${key} ${JSON.stringify(value)}`, async () => {
+      const res = await updateSetting(key, value)
 
       expect(res.statusCode).to.equal(expectedStatus)
       const stored = await Database.libraryModel.findByPk(library.id)
-      expect(stored.settings.autoMatchMinConfidence).to.equal(expectedSetting)
+      expect(stored.settings[key]).to.equal(expectedSetting)
     })
   })
 })

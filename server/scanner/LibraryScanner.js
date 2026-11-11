@@ -328,8 +328,13 @@ class LibraryScanner {
   async autoMatchAddedLibraryItem(library, libraryItem) {
     if (!library.settings.autoMatchNewItems) return
 
+    const options = {
+      provider: library.settings.autoMatchProvider || Database.libraryModel.getDefaultLibrarySettingsForMediaType(library.mediaType).autoMatchProvider
+    }
     const minConfidencePercent = library.settings.autoMatchMinConfidence
-    const options = typeof minConfidencePercent === 'number' ? { minConfidence: minConfidencePercent / 100 } : {}
+    if (typeof minConfidencePercent === 'number') {
+      options.minConfidence = minConfidencePercent / 100
+    }
     await getScanner().matchLibraryItem(this.apiRouter, library, libraryItem, options)
   }
 

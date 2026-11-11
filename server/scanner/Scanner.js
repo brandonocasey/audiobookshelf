@@ -451,7 +451,7 @@ class Scanner {
 
     let result
     try {
-      result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { ...options, provider: library.provider })
+      result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider, ...options })
     } catch (error) {
       Logger.error(`[Scanner] matchLibraryItems: Failed to match library item "${libraryItem.media.title}"`, error)
       return false

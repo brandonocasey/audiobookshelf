@@ -7,7 +7,8 @@ const Logger = require('../Logger')
  * @property {boolean} disableWatcher
  * @property {boolean} skipMatchingMediaWithAsin
  * @property {boolean} skipMatchingMediaWithIsbn
- * @property {boolean} autoMatchNewItems Quick match books added by a scan with the library provider
+ * @property {boolean} autoMatchNewItems Quick match books added by a scan with autoMatchProvider
+ * @property {string} autoMatchProvider Audible provider used for auto matches
  * @property {number} autoMatchMinConfidence Minimum match confidence (0-100) to apply an auto match. Results without a confidence are skipped while this is set.
  * @property {string} autoScanCronExpression
  * @property {boolean} audiobooksOnly
@@ -73,6 +74,7 @@ class Library extends Model {
         skipMatchingMediaWithAsin: false,
         skipMatchingMediaWithIsbn: false,
         autoMatchNewItems: false,
+        autoMatchProvider: 'audible',
         autoMatchMinConfidence: null,
         audiobooksOnly: false,
         epubsAllowScriptedContent: false,

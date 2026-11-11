@@ -122,6 +122,24 @@ describe('LibraryScanner auto match new items', () => {
       expect((await Database.libraryModel.findByPk(library.id)).lastScan).to.exist
     })
 
+    describe('provider', () => {
+      const cases = [
+        { name: 'searches the auto match provider instead of the library provider', autoMatchProvider: 'audible.uk', expectedProvider: 'audible.uk' },
+        { name: 'searches Audible.com when the library has no auto match provider', autoMatchProvider: undefined, expectedProvider: 'audible' }
+      ]
+      cases.forEach(({ name, autoMatchProvider, expectedProvider }) => {
+        it(name, async () => {
+          library.settings = { ...library.settings, autoMatchNewItems: true, autoMatchProvider }
+          await library.save()
+          addBookFolder('Some Author/New Book')
+
+          await runLibraryScan()
+
+          expect(BookFinder.search.firstCall.args[1]).to.equal(expectedProvider)
+        })
+      })
+    })
+
     describe('minimum confidence', () => {
       const cases = [
         { name: 'matches when confidence is above the minimum', minConfidence: 90, matchConfidence: 0.95, expectedIsbn: matchedIsbn },

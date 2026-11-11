@@ -65,6 +65,9 @@
         </div>
       </div>
       <div v-if="isBookLibrary" class="p-2 w-full md:w-1/2">
+        <ui-dropdown :label="$strings.LabelSettingsAutoMatchProvider" v-model="autoMatchProvider" :items="autoMatchProviders" small class="max-w-72" menu-max-height="200px" @input="formUpdated" />
+      </div>
+      <div v-if="isBookLibrary" class="p-2 w-full md:w-1/2">
         <div class="flex items-center">
           <ui-toggle-switch v-model="hideSingleBookSeries" size="sm" @input="formUpdated" />
           <ui-tooltip :text="$strings.LabelSettingsHideSingleBookSeriesHelp">
@@ -134,6 +137,7 @@ export default {
       skipMatchingMediaWithAsin: false,
       skipMatchingMediaWithIsbn: false,
       autoMatchNewItems: false,
+      autoMatchProvider: 'audible',
       autoMatchMinConfidence: null,
       audiobooksOnly: false,
       epubsAllowScriptedContent: false,
@@ -159,6 +163,9 @@ export default {
     },
     isPodcastLibrary() {
       return this.mediaType === 'podcast'
+    },
+    autoMatchProviders() {
+      return this.$store.state.scanners.bookProviders.filter((provider) => provider.value.startsWith('audible'))
     },
     maskAsFinishedWhenItems() {
       return [
@@ -194,6 +201,7 @@ export default {
           skipMatchingMediaWithAsin: !!this.skipMatchingMediaWithAsin,
           skipMatchingMediaWithIsbn: !!this.skipMatchingMediaWithIsbn,
           autoMatchNewItems: !!this.autoMatchNewItems,
+          autoMatchProvider: this.autoMatchProvider,
           autoMatchMinConfidence: this.autoMatchMinConfidence === null || this.autoMatchMinConfidence === '' ? null : Number(this.autoMatchMinConfidence),
           audiobooksOnly: !!this.audiobooksOnly,
           epubsAllowScriptedContent: !!this.epubsAllowScriptedContent,
@@ -214,6 +222,7 @@ export default {
       this.skipMatchingMediaWithAsin = !!this.librarySettings.skipMatchingMediaWithAsin
       this.skipMatchingMediaWithIsbn = !!this.librarySettings.skipMatchingMediaWithIsbn
       this.autoMatchNewItems = !!this.librarySettings.autoMatchNewItems
+      this.autoMatchProvider = this.librarySettings.autoMatchProvider || 'audible'
       this.autoMatchMinConfidence = this.librarySettings.autoMatchMinConfidence ?? null
       this.audiobooksOnly = !!this.librarySettings.audiobooksOnly
       this.epubsAllowScriptedContent = !!this.librarySettings.epubsAllowScriptedContent
@@ -229,6 +238,7 @@ export default {
   },
   mounted() {
     this.init()
+    this.$store.dispatch('scanners/fetchProviders')
   }
 }
 </script>
