@@ -32,20 +32,41 @@ const { getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumb
  */
 
 /**
- * @param {import('../models/Book')} media Book with authors and series loaded
+ * Audio files that play, in play order. Excluded files are left out unless the item is a single file.
+ *
+ * @param {import('../models/LibraryItem')} libraryItem Book library item
+ * @returns {import('../objects/files/AudioFile')[]}
+ */
+function getPlayableAudioFiles({ media, isFile }) {
+  return media.audioFiles.filter((audioFile) => isFile || !audioFile.exclude).sort((a, b) => a.index - b.index)
+}
+
+/**
+ * @param {import('../models/LibraryItem')} libraryItem Book library item with authors and series loaded
  * @returns {import('./organizeTemplate').TemplateMetadata}
  */
-function getTemplateMetadata(media) {
+function getTemplateMetadata(libraryItem) {
+  const { media } = libraryItem
+  const firstAudioFile = getPlayableAudioFiles(libraryItem)[0]
   return {
     title: media.title,
+    titleIgnorePrefix: media.titleIgnorePrefix,
     subtitle: media.subtitle,
     authors: media.authors.map((author) => author.name),
     series: media.series.map((series) => ({ name: series.name, sequence: series.bookSeries?.sequence })),
     narrators: media.narrators,
+    genres: media.genres,
     publishedYear: media.publishedYear,
+    publishedDate: media.publishedDate,
+    language: media.language,
+    abridged: media.abridged,
+    explicit: media.explicit,
     asin: media.asin,
     isbn: media.isbn,
-    publisher: media.publisher
+    publisher: media.publisher,
+    codec: firstAudioFile?.codec,
+    bitRate: firstAudioFile?.bitRate,
+    channels: firstAudioFile?.channels
   }
 }
 
@@ -54,23 +75,30 @@ function getTemplateMetadata(media) {
  * Excluded audio files keep their names.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
- * @returns {{path:string, filename:string, ext:string, fileValues:{track?:string, disc?:string}}[]}
+ * @returns {{path:string, filename:string, ext:string, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
  */
 function getFilesToRename(libraryItem) {
-  const { media, isFile } = libraryItem
-  const audioFiles = media.audioFiles.filter((audioFile) => isFile || !audioFile.exclude).sort((a, b) => a.index - b.index)
+  const { media } = libraryItem
+  const audioFiles = getPlayableAudioFiles(libraryItem)
   const files = audioFiles.map((audioFile, i) => {
     const disc = audioFile.discNumFromMeta ?? audioFile.discNumFromFilename
+    const { path, filename, ext } = audioFile.metadata
     return {
-      path: audioFile.metadata.path,
-      filename: audioFile.metadata.filename,
-      ext: audioFile.metadata.ext,
-      fileValues: { track: formatTrackNumber(i + 1, audioFiles.length), disc: disc === null || disc === undefined ? '' : String(disc) }
+      path,
+      filename,
+      ext,
+      fileValues: {
+        track: formatTrackNumber(i + 1, audioFiles.length),
+        trackTotal: audioFiles.length > 1 ? String(audioFiles.length) : '',
+        trackTitle: audioFile.metaTags?.tagTitle,
+        disc: disc === null || disc === undefined ? '' : String(disc),
+        originalName: Path.basename(filename, ext)
+      }
     }
   })
   if (media.ebookFile) {
     const { path, filename, ext } = media.ebookFile.metadata
-    files.push({ path, filename, ext, fileValues: {} })
+    files.push({ path, filename, ext, fileValues: { originalName: Path.basename(filename, ext) } })
   }
   return files
 }
@@ -83,7 +111,7 @@ function getFilesToRename(libraryItem) {
  * @returns {{segments:string[], files:{path:string, filename:string, newName:string}[]}} Folder segments below the library folder and the new name of each file
  */
 function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplate }) {
-  const values = getTemplateValues(getTemplateMetadata(libraryItem.media))
+  const values = getTemplateValues(getTemplateMetadata(libraryItem))
   const segments = renderFolderSegments(organizeFolderTemplate, values)
   const files = getFilesToRename(libraryItem).map((file) => ({
     path: file.path,

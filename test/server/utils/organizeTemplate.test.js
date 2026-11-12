@@ -15,6 +15,89 @@ describe('organizeTemplate', () => {
 
   const book = { title: 'The Way of Kings', authors: ['Brandon Sanderson', 'Someone Else'], series: [{ name: 'The Stormlight Archive', sequence: '1' }], narrators: ['Michael Kramer'], publishedYear: 2010, asin: 'B003ZWFO7E' }
 
+  describe('new tokens', () => {
+    const fullBook = {
+      ...book,
+      authors: ['Brandon Sanderson', 'Someone Else'],
+      titleIgnorePrefix: 'Way of Kings, The',
+      narrators: ['Michael Kramer', 'Kate Reading'],
+      genres: ['Fantasy', 'Epic'],
+      publishedDate: '2010-08-31',
+      language: 'English',
+      abridged: true,
+      explicit: true,
+      codec: 'aac',
+      bitRate: 64000,
+      channels: 2
+    }
+    const fileValues = { track: '02', trackTotal: '12', trackTitle: 'Chapter: Two', disc: '1', originalName: 'Part 2' }
+
+    it('renders each book token', () => {
+      const values = getTemplateValues(fullBook)
+      const rendered = {
+        authorSort: 'Sanderson, Brandon',
+        authorInitial: 'S',
+        titleThe: 'Way of Kings, The',
+        sequencePadded: '01',
+        narrators: 'Michael Kramer, Kate Reading',
+        genre: 'Fantasy',
+        genres: 'Fantasy, Epic',
+        language: 'English',
+        publishedDate: '2010-08-31',
+        abridged: 'Abridged',
+        explicit: 'Explicit',
+        codec: 'aac',
+        bitrate: '64',
+        channels: '2'
+      }
+      for (const [token, expected] of Object.entries(rendered)) {
+        expect(renderFolderSegments(`{${token}}`, values), token).to.deep.equal([expected])
+      }
+    })
+
+    it('renders each file token and cleans names from the file', () => {
+      const values = getTemplateValues(fullBook, fileValues)
+      expect(renderFileName('{originalName}, {trackTitle}, {track} of {trackTotal}, {disc}', values, '.mp3')).to.equal('Part 2, Chapter - Two, 02 of 12, 1.mp3')
+    })
+
+    it('renders them empty when the details are missing so their groups drop out', () => {
+      const values = getTemplateValues({ title: 'Solo', authors: [] })
+      const template = '{title}< {authorSort}>< {titleThe}>< {genre}>< ({abridged})>< {codec}>< {bitrate}k>< {trackTitle}>'
+      expect(renderFileName(template, values, '.mp3')).to.equal('Solo.mp3')
+    })
+
+    it('pads only the leading number of a sequence', () => {
+      const padded = (sequence) => getTemplateValues({ ...book, series: [{ name: 'S', sequence }] }).sequencePadded
+      expect(['2', '10', '100', '1.5', '0.5', 'Book 1', ''].map(padded)).to.deep.equal(['02', '10', '100', '01.5', '00.5', 'Book 1', ''])
+    })
+
+    it('takes the first letter of the sorted first author in upper case, including accented and astral characters', () => {
+      const initial = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorInitial
+      expect(['brandon sanderson', 'élodie', '𠮷野', '3 Doors Down'].map(initial)).to.deep.equal(['S', 'É', '𠮷', 'D'])
+    })
+
+    it('sorts the first author as last name first, with a suffix and a single name', () => {
+      const sorted = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorSort
+      expect(['Arthur Conan Doyle', 'Plato'].map(sorted)).to.deep.equal(['Doyle, Arthur Conan', 'Plato'])
+    })
+
+    it('accepts the new tokens in templates and still rejects unknown and file-only ones in folders', () => {
+      expect(getTemplateSettingError('organizeFolderTemplate', '{authorSort}/{titleThe}')).to.equal(null)
+      expect(getTemplateSettingError('organizeFileTemplate', '{originalName} {trackTitle} {trackTotal}')).to.equal(null)
+      expect(getTemplateSettingError('organizeFolderTemplate', '{originalName}')).to.equal('Unknown token "{originalName}"')
+      expect(getTemplateSettingError('organizeFolderTemplate', '{authorsort}')).to.equal('Unknown token "{authorsort}"')
+    })
+
+    it('fills {originalName} and {trackTotal} for uploads and leaves the rest empty', () => {
+      const settings = { organizeFolderTemplate: '{title}', organizeFileTemplate: '{originalName}< [{trackTotal}]>< {codec}>' }
+      const { newNames } = getUploadLayout(settings, { title: 'My Book', author: null, series: null }, ['Part 1.mp3', 'Part 2.mp3', 'cover.jpg'])
+      expect([...newNames]).to.deep.equal([
+        ['Part 1.mp3', 'Part 1 [2].mp3'],
+        ['Part 2.mp3', 'Part 2 [2].mp3']
+      ])
+    })
+  })
+
   describe('renderFolderSegments', () => {
     it('renders the default template with every detail present', () => {
       const segments = renderFolderSegments(DEFAULT_FOLDER_TEMPLATE, getTemplateValues(book))

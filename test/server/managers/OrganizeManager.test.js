@@ -404,6 +404,22 @@ describe('OrganizeManager', () => {
       expect(listFiles(rel('Writer', 'Book'))).to.deep.equal(['Book - 3.mp3', 'Book - Disc 0 - 2.mp3', 'Book - Disc 2 - 1.mp3'])
     })
 
+    it('fills book and file tokens from the stored book and its first audio file', async () => {
+      await library.update({
+        settings: { ...library.settings, organizeFolderTemplate: '{authorInitial}/{authorSort}/{titleThe}< ({genre})>', organizeFileTemplate: '{originalName} [{codec} {bitrate}k {channels}ch]< {trackTitle}> {track}of{trackTotal}' }
+      })
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'The Book', authors: ['Jane Writer'] })
+      const book = (await loadItem(libraryItemId)).media
+      book.set({ titleIgnorePrefix: 'Book, The', genres: ['Fantasy', 'Epic'] })
+      book.audioFiles = [...book.audioFiles].sort((x, y) => x.index - y.index).map((audioFile, i) => ({ ...audioFile, codec: i === 0 ? 'aac' : 'mp3', bitRate: i === 0 ? 64000 : 128000, channels: i === 0 ? 2 : 1, metaTags: { ...audioFile.metaTags, tagTitle: i === 0 ? 'Intro' : null } }))
+      book.changed('audioFiles', true)
+      await book.save()
+
+      await manager.organizeItem(libraryItemId)
+
+      expect(listFiles(rel('W', 'Writer, Jane', 'Book, The (Fantasy)'))).to.deep.equal(['a [aac 64k 2ch] Intro 1of2.mp3', 'b [aac 64k 2ch] 2of2.mp3'])
+    })
+
     it('has the file watcher ignore the old and the new folder while it works', async () => {
       const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
 
