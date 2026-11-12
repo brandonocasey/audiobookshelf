@@ -789,6 +789,9 @@ class LibraryItemController {
     if (!libraryItems?.length) {
       return res.sendStatus(400)
     }
+    if (!ensureUserCanAccessLibraryItemsForBatch(req, res, libraryItems)) {
+      return
+    }
 
     res.sendStatus(200)
 
@@ -837,14 +840,15 @@ class LibraryItemController {
       return res.sendStatus(400)
     }
 
-    const libraryItems = await Database.libraryItemModel.findAll({
-      where: {
-        id: req.body.libraryItemIds
-      },
-      attributes: ['id', 'libraryId', 'isFile']
+    // The access check reads the explicit flag and tags of the media
+    const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({
+      id: req.body.libraryItemIds
     })
     if (!libraryItems?.length) {
       return res.sendStatus(400)
+    }
+    if (!ensureUserCanAccessLibraryItemsForBatch(req, res, libraryItems)) {
+      return
     }
 
     res.sendStatus(200)

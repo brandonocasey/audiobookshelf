@@ -289,6 +289,25 @@ describe('LibraryItemController', () => {
       expect(fakeRes.sendStatus.calledWith(403)).to.be.true
     })
 
+    ;['batchQuickMatch', 'batchScan'].forEach((handlerName) => {
+      describe(handlerName, () => {
+        const userOfLib1 = (permissions) => Database.userModel.build({ username: 'admin', type: 'admin', isActive: true, permissions: { accessAllLibraries: false, librariesAccessible: [lib1Id], accessAllTags: true, accessExplicitContent: true, ...permissions } })
+
+        it('returns 403 for a library item in a library the user cannot access', async () => {
+          const fakeRes = { sendStatus: sinon.spy() }
+          await LibraryItemController[handlerName].bind(apiRouter)({ user: userOfLib1(), body: { libraryItemIds: [itemLib1Id, itemLib2Id] } }, fakeRes)
+          expect(fakeRes.sendStatus.args).to.deep.equal([[403]])
+        })
+
+        it('returns 403 for an explicit library item when the user cannot access explicit content', async () => {
+          await Database.bookModel.update({ explicit: true }, { where: { title: 'B1' } })
+          const fakeRes = { sendStatus: sinon.spy() }
+          await LibraryItemController[handlerName].bind(apiRouter)({ user: userOfLib1({ accessExplicitContent: false }), body: { libraryItemIds: [itemLib1Id] } }, fakeRes)
+          expect(fakeRes.sendStatus.args).to.deep.equal([[403]])
+        })
+      })
+    })
+
     it('batchDelete returns 403 for a library item the user cannot access', async () => {
       const fakeRes = { sendStatus: sinon.spy() }
       const fakeReq = {

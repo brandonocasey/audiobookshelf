@@ -86,6 +86,8 @@ describe('OrganizeManager', () => {
     LibraryScanner.scanningFilesChanged = false
     LibraryScanner.pendingFileUpdatesToScan = []
     LibraryScanner.fileScanCountsByLibraryId.clear()
+    LibraryScanner.apiRouter = null
+    LibraryScanner.autoOrganizeTargetsByLibraryId.clear()
     fs.rmSync(tmpDir, { recursive: true, force: true })
     await Database.sequelize.sync({ force: true })
   })
@@ -1446,6 +1448,64 @@ describe('OrganizeManager', () => {
       expect(listFiles(rel('Writer'))).to.deep.equal(['Matched Title', 'Matched Title/Matched Title.m4b'])
     })
 
+    describe('after an auto match of a new book', () => {
+      const scans = {
+        'library scan': async () => LibraryScanner.scan(await Database.libraryModel.findByIdWithFolders(library.id)),
+        'watcher batch': async () => {
+          const pendingTask = new Task()
+          pendingTask.setData('watcher-scan', { text: 'Scanning', key: 'MessageTaskScanningFileChanges' }, null, false, {})
+          await LibraryScanner.scanFilesChanged([{ libraryId: library.id, folderId: libraryFolder.id, path: rel('Writer', 'Book', 'Book.m4b'), relPath: 'Writer/Book/Book.m4b', type: 'added' }], pendingTask)
+        }
+      }
+
+      beforeEach(async () => {
+        await library.update({ settings: { ...library.settings, autoOrganize: true, autoMatchNewItems: true } })
+        Database.serverSettings = { scannerFindCovers: false, scannerPreferMatchedMetadata: true }
+        sinon.stub(BookFinder, 'search').resolves([{ title: 'Matched Title', author: 'Writer' }])
+        LibraryScanner.apiRouter = { organizeManager: manager }
+        fs.mkdirSync(rel('Writer', 'Book'), { recursive: true })
+        fs.writeFileSync(rel('Writer', 'Book', 'Book.m4b'), 'Book.m4b')
+      })
+
+      async function expectBookOrganized() {
+        await LibraryScanner.waitForOrganizeRuns([library.id], 'the test')
+        expect(listFiles(rel('Writer'))).to.deep.equal(['Matched Title', 'Matched Title/Matched Title.m4b'])
+        expect((await Database.libraryItemModel.findOne({ where: { libraryId: library.id } })).path).to.equal(rel('Writer', 'Matched Title'))
+      }
+
+      Object.entries(scans).forEach(([scanName, runScan]) => {
+        it(`organizes the book once the ${scanName} ends`, async () => {
+          await runScan()
+
+          await expectBookOrganized()
+        })
+      })
+
+      it('organizes the book of a watcher batch once a library scan running beside it ends', async () => {
+        const scanFolder = LibraryScanner.scanFolder
+        let releaseLibraryScan
+        const libraryScanReleased = new Promise((resolve) => (releaseLibraryScan = resolve))
+        let libraryScanReachedFolder
+        const libraryScanAtFolder = new Promise((resolve) => (libraryScanReachedFolder = resolve))
+        sinon.stub(LibraryScanner, 'scanFolder').callsFake(async function (...args) {
+          libraryScanReachedFolder()
+          await libraryScanReleased
+          return scanFolder.apply(this, args)
+        })
+
+        const libraryScan = scans['library scan']()
+        await libraryScanAtFolder
+        await scans['watcher batch']()
+        await LibraryScanner.waitForOrganizeRuns([library.id], 'the test')
+        const filesDuringLibraryScan = listFiles(rel('Writer'))
+        releaseLibraryScan()
+        await libraryScan
+
+        expect(filesDuringLibraryScan).to.deep.equal(['Book', 'Book/Book.m4b'])
+        await expectBookOrganized()
+      })
+    })
+
     it('does not run when the edit changed nothing', async () => {
       await library.update({ settings: { ...library.settings, autoOrganize: true } })
       const libraryItemId = await addBook('Raw', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
@@ -1905,7 +1965,7 @@ describe('OrganizeManager', () => {
 
       function rescanBatch(libraryItemIds) {
         const responded = deferred()
-        const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true }, body: { libraryItemIds } }, { sendStatus: responded.resolve })
+        const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true, checkCanAccessLibraryItem: () => true }, body: { libraryItemIds } }, { sendStatus: responded.resolve })
         return { rescan, responded: responded.promise }
       }
 

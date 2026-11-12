@@ -34,6 +34,8 @@ class LibraryScanner {
     this.fileScanCountsByLibraryId = new Map()
     /** @type {[import('../Watcher').PendingFileUpdate[], Task][]} */
     this.pendingFileUpdatesToScan = []
+    /** @type {Map<string, Map<string, string>>} - library id to item id to its target before an auto match during a scan */
+    this.autoOrganizeTargetsByLibraryId = new Map()
   }
 
   /**
@@ -152,6 +154,7 @@ class LibraryScanner {
       if (count > 0) this.fileScanCountsByLibraryId.set(libraryId, count)
       else this.fileScanCountsByLibraryId.delete(libraryId)
     }
+    this.autoOrganizeMatchedItems(libraryIds)
   }
 
   /**
@@ -252,6 +255,7 @@ class LibraryScanner {
 
     if (this.cancelLibraryScan[libraryScan.libraryId]) delete this.cancelLibraryScan[libraryScan.libraryId]
     this.librariesScanning = this.librariesScanning.filter((lid) => lid !== library.id)
+    this.autoOrganizeMatchedItems([library.id])
 
     TaskManager.taskFinished(task)
 
@@ -449,14 +453,31 @@ class LibraryScanner {
   async autoMatchAddedLibraryItem(library, libraryItem) {
     if (!library.settings.autoMatchNewItems) return
 
+    if (!this.autoOrganizeTargetsByLibraryId.has(library.id)) this.autoOrganizeTargetsByLibraryId.set(library.id, new Map())
     const options = {
-      provider: library.settings.autoMatchProvider
+      provider: library.settings.autoMatchProvider,
+      autoOrganizeTargets: this.autoOrganizeTargetsByLibraryId.get(library.id)
     }
     const minConfidencePercent = library.settings.autoMatchMinConfidence
     if (typeof minConfidencePercent === 'number') {
       options.minConfidence = minConfidencePercent / 100
     }
     await getScanner().matchLibraryItem(this.apiRouter, library, libraryItem, options)
+  }
+
+  /**
+   * Auto organize skips books while their library is scanned.
+   * Organize the matched books whose target changed once no scan of their library is left.
+   *
+   * @param {Iterable<string>} libraryIds
+   */
+  autoOrganizeMatchedItems(libraryIds) {
+    for (const libraryId of libraryIds) {
+      const targets = this.autoOrganizeTargetsByLibraryId.get(libraryId)
+      if (!targets?.size || this.isLibraryFileScanning(libraryId)) continue
+      this.autoOrganizeTargetsByLibraryId.delete(libraryId)
+      this.apiRouter.organizeManager.autoOrganizeItemsInBackground(targets)
+    }
   }
 
   shouldCancelScan(libraryScan) {
@@ -621,6 +642,7 @@ class LibraryScanner {
       Logger.error(`[LibraryScanner] Failed to scan files changed from watcher`, error)
       throw error
     } finally {
+      // Removing the mark can start an organize run. The queued batch MUST start after it, so that it waits for the run.
       this.removeFileScanMark(libraryIds)
       // A failed batch MUST NOT leave later batches queued forever
       this.scanningFilesChanged = false

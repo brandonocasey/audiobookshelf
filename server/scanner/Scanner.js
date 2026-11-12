@@ -23,6 +23,7 @@ const TaskManager = require('../managers/TaskManager')
  * @property {boolean} [overrideCover]
  * @property {boolean} [overrideDetails]
  * @property {number} [minConfidence] - Skip the match unless its confidence (0-1) is at least this
+ * @property {Map<string, string>} [autoOrganizeTargets] - When set, the match records the book's prior target here instead of organizing it.
  */
 
 class Scanner {
@@ -135,7 +136,7 @@ class Scanner {
 
       SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
 
-      libraryItem = (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id, organizeTargetBefore)) || libraryItem
+      libraryItem = await this.autoOrganizeMatchedItem(apiRouterCtx, libraryItem, organizeTargetBefore, options.autoOrganizeTargets)
     }
 
     return {
@@ -190,6 +191,21 @@ class Scanner {
     }
 
     return updatePayload
+  }
+
+  /**
+   * Organize the matched book now, or record its prior target in autoOrganizeTargets when given
+   *
+   * @param {import('../routers/ApiRouter')} apiRouterCtx
+   * @param {import('../models/LibraryItem')} libraryItem
+   * @param {string|null} organizeTargetBefore
+   * @param {Map<string, string>} [autoOrganizeTargets]
+   * @returns {Promise<import('../models/LibraryItem')>} The reloaded item when it was moved
+   */
+  async autoOrganizeMatchedItem(apiRouterCtx, libraryItem, organizeTargetBefore, autoOrganizeTargets) {
+    if (!autoOrganizeTargets) return (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id, organizeTargetBefore)) || libraryItem
+    if (organizeTargetBefore !== null) autoOrganizeTargets.set(libraryItem.id, organizeTargetBefore)
+    return libraryItem
   }
 
   /**
