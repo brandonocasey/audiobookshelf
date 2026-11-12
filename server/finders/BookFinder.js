@@ -378,17 +378,19 @@ class BookFinder {
     const maxFuzzySearches = !isNaN(options.maxFuzzySearches) ? Number(options.maxFuzzySearches) : 5
     let numFuzzySearches = 0
 
+    // Truncate excessively long inputs to prevent ReDoS attacks
+    const MAX_INPUT_LENGTH = 500
+    title = title?.substring(0, MAX_INPUT_LENGTH) || title
+    author = author?.substring(0, MAX_INPUT_LENGTH) || author
+
     // Custom providers are assumed to be correct
     if (provider.startsWith('custom-')) {
-      return this.getCustomProviderResults(title, author, isbn, provider)
+      books = await this.getCustomProviderResults(title, author, isbn, provider)
+      if (title) this.setMatchConfidences(books, libraryItem, { title, author, isTitleAsin: isValidASIN(title.toUpperCase()) })
+      return books
     }
 
     if (!title) return books
-
-    // Truncate excessively long inputs to prevent ReDoS attacks
-    const MAX_INPUT_LENGTH = 500
-    title = title.substring(0, MAX_INPUT_LENGTH)
-    author = author?.substring(0, MAX_INPUT_LENGTH) || author
 
     const isTitleAsin = isValidASIN(title.toUpperCase())
 
@@ -428,26 +430,35 @@ class BookFinder {
       }
     }
 
-    if (books.length && libraryItem) {
-      const isAudibleProvider = provider.startsWith('audible')
-      const libraryItemDurationMinutes = libraryItem?.media?.duration ? libraryItem.media.duration / 60 : null
+    this.setMatchConfidences(books, libraryItem, { title: actualTitleQuery, author: actualAuthorQuery, isTitleAsin })
 
-      books.forEach((book) => {
-        if (typeof book !== 'object' || !isAudibleProvider) return
-        book.matchConfidence = this.calculateMatchConfidence(book, libraryItemDurationMinutes, actualTitleQuery, actualAuthorQuery, isTitleAsin)
+    const libraryItemDurationMinutes = getDurationMinutes(libraryItem)
+    if (provider.startsWith('audible') && libraryItemDurationMinutes) {
+      books.sort((a, b) => {
+        const aDuration = a.duration || Number.POSITIVE_INFINITY
+        const bDuration = b.duration || Number.POSITIVE_INFINITY
+        const aDurationDiff = Math.abs(aDuration - libraryItemDurationMinutes)
+        const bDurationDiff = Math.abs(bDuration - libraryItemDurationMinutes)
+        return aDurationDiff - bDurationDiff
       })
-
-      if (isAudibleProvider && libraryItemDurationMinutes) {
-        books.sort((a, b) => {
-          const aDuration = a.duration || Number.POSITIVE_INFINITY
-          const bDuration = b.duration || Number.POSITIVE_INFINITY
-          const aDurationDiff = Math.abs(aDuration - libraryItemDurationMinutes)
-          const bDurationDiff = Math.abs(bDuration - libraryItemDurationMinutes)
-          return aDurationDiff - bDurationDiff
-        })
-      }
     }
     return books
+  }
+
+  /**
+   * Set matchConfidence on each search result that has a title
+   *
+   * @param {Object[]} books
+   * @param {import('../models/LibraryItem')|null} libraryItem - Results are left unscored without a library item
+   * @param {{title: string, author: string, isTitleAsin: boolean}} query
+   */
+  setMatchConfidences(books, libraryItem, query) {
+    if (!libraryItem) return
+    const libraryItemDurationMinutes = getDurationMinutes(libraryItem)
+    for (const book of books) {
+      if (!book?.title) continue
+      book.matchConfidence = this.calculateMatchConfidence(book, libraryItemDurationMinutes, query.title, query.author, query.isTitleAsin)
+    }
   }
 
   /**
@@ -463,8 +474,9 @@ class BookFinder {
     // ASIN results are always a match
     if (isTitleAsin) return 1.0
 
-    let durationScore
-    if (libraryItemDurationMinutes && typeof book.duration === 'number') {
+    // A duration of 0 is unknown: Audible gives 0 when it has no runtime
+    let durationScore = null
+    if (libraryItemDurationMinutes && typeof book.duration === 'number' && book.duration > 0) {
       const durationDiff = Math.abs(book.duration - libraryItemDurationMinutes)
       // Duration scores:
       // diff | score
@@ -497,9 +509,6 @@ class BookFinder {
         durationScore = 0.0
       }
       Logger.debug(`[BookFinder] Duration diff: ${durationDiff}, durationScore: ${durationScore}`)
-    } else {
-      // Default score if library item duration or book duration is not available
-      durationScore = 0.1
     }
 
     const calculateTitleScore = (titleQuery, book, keepSubtitle = false) => {
@@ -559,7 +568,8 @@ class BookFinder {
     const W_AUTHOR = 0.1
 
     Logger.debug(`[BookFinder] Duration score: ${durationScore}, Title score: ${titleScore}, Author score: ${authorScore}`)
-    const confidence = W_DURATION * durationScore + W_TITLE * titleScore + W_AUTHOR * authorScore
+    // Without a duration on both sides, title and author keep their relative weights and fill the whole 0-1 range
+    const confidence = durationScore === null ? (W_TITLE * titleScore + W_AUTHOR * authorScore) / (W_TITLE + W_AUTHOR) : W_DURATION * durationScore + W_TITLE * titleScore + W_AUTHOR * authorScore
     Logger.debug(`[BookFinder] Confidence: ${confidence}`)
     return Math.max(0, Math.min(1, confidence))
   }
@@ -644,6 +654,14 @@ class BookFinder {
   }
 }
 module.exports = new BookFinder()
+
+/**
+ * @param {import('../models/LibraryItem')|null} libraryItem
+ * @returns {number|null}
+ */
+function getDurationMinutes(libraryItem) {
+  return libraryItem?.media?.duration ? libraryItem.media.duration / 60 : null
+}
 
 function hasSubtitle(title) {
   return title.includes(': ') || title.includes(' - ')

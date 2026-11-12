@@ -375,7 +375,6 @@ describe('search', () => {
     const W_DURATION = 0.7
     const W_TITLE = 0.2
     const W_AUTHOR = 0.1
-    const DEFAULT_DURATION_SCORE_MISSING_INFO = 0.1
 
     const libraryItemPerfectDuration = { media: { duration: 600 } } // 10 minutes
 
@@ -456,22 +455,17 @@ describe('search', () => {
         expect(results[0].matchConfidence).to.be.closeTo(expectedConfidence, 0.001)
       })
 
-      it('should use default duration score if libraryItem duration is missing', async () => {
-        const bookResults = [{ duration: 10, title: 'The Great Novel', author: 'John Doe' }]
-        runSearchStub.resolves(bookResults)
-        const results = await bookFinder.search({ media: {} }, provider, 'The Great Novel', 'John Doe')
-        // durationScore = DEFAULT_DURATION_SCORE_MISSING_INFO (0.2)
-        const expectedConfidence = W_DURATION * DEFAULT_DURATION_SCORE_MISSING_INFO + W_TITLE * 1.0 + W_AUTHOR * 1.0
-        expect(results[0].matchConfidence).to.be.closeTo(expectedConfidence, 0.001)
-      })
-
-      it('should use default duration score if book duration is missing', async () => {
-        const bookResults = [{ title: 'The Great Novel', author: 'John Doe' }] // No duration in book
-        runSearchStub.resolves(bookResults)
-        const results = await bookFinder.search(libraryItemPerfectDuration, provider, 'The Great Novel', 'John Doe')
-        // durationScore = DEFAULT_DURATION_SCORE_MISSING_INFO (0.2)
-        const expectedConfidence = W_DURATION * DEFAULT_DURATION_SCORE_MISSING_INFO + W_TITLE * 1.0 + W_AUTHOR * 1.0
-        expect(results[0].matchConfidence).to.be.closeTo(expectedConfidence, 0.001)
+      const missingDurationCases = [
+        { name: 'libraryItem duration is missing', libraryItem: { media: {} }, bookDuration: 10 },
+        { name: 'book duration is missing', libraryItem: libraryItemPerfectDuration, bookDuration: undefined },
+        { name: 'book duration is 0', libraryItem: libraryItemPerfectDuration, bookDuration: 0 }
+      ]
+      missingDurationCases.forEach(({ name, libraryItem, bookDuration }) => {
+        it(`should score on title and author alone if ${name}`, async () => {
+          runSearchStub.resolves([{ duration: bookDuration, title: 'The Great Novel', author: 'John Doe' }])
+          const results = await bookFinder.search(libraryItem, provider, 'The Great Novel', 'John Doe')
+          expect(results[0].matchConfidence).to.be.closeTo(1.0, 0.001)
+        })
       })
 
       it('should correctly score a partial title match', async () => {
@@ -583,13 +577,43 @@ describe('search', () => {
       })
     })
 
-    describe('for non-audible provider (e.g., google)', () => {
-      const provider = 'google'
-      it('should have not have matchConfidence', async () => {
-        const bookResults = [{ title: 'The Great Novel', author: 'John Doe' }]
-        runSearchStub.resolves(bookResults)
-        const results = await bookFinder.search(libraryItemPerfectDuration, provider, 'The Great Novel', 'John Doe')
-        expect(results[0]).to.not.have.property('matchConfidence')
+    describe('for every provider', () => {
+      const perfectMatch = { title: 'The Great Novel', author: 'John Doe' }
+      const query = { libraryItem: libraryItemPerfectDuration, title: 'The Great Novel', author: 'John Doe' }
+      const googleBooks = { provider: 'google', providerApi: bookFinder.googleBooks, method: 'search' }
+      const customProvider = { provider: 'custom-abc', providerApi: bookFinder.customProviderAdapter, method: 'search' }
+      // expectedConfidence undefined means the result has no matchConfidence
+      const cases = [
+        { name: 'google scores a perfect title and author match without a duration', ...googleBooks, ...query, books: [perfectMatch], expectedConfidence: 1.0 },
+        { name: 'openlibrary scores a perfect title and author match', provider: 'openlibrary', providerApi: bookFinder.openLibrary, method: 'searchTitle', ...query, books: [perfectMatch], expectedConfidence: 1.0 },
+        { name: 'itunes scores a perfect title and author match', provider: 'itunes', providerApi: bookFinder.iTunesApi, method: 'searchAudiobooks', ...query, books: [perfectMatch], expectedConfidence: 1.0 },
+        { name: 'fantlab scores a perfect title and author match', provider: 'fantlab', providerApi: bookFinder.fantLab, method: 'search', ...query, books: [perfectMatch], expectedConfidence: 1.0 },
+        { name: 'custom providers score a perfect title and author match', ...customProvider, ...query, books: [perfectMatch], expectedConfidence: 1.0 },
+        // title 0.625 (1 - 3/8 for 'novel ex' vs 'novel'): (0.2 * 0.625 + 0.1 * 1) / 0.3
+        { name: 'scores a partial title match on title and author weights', ...googleBooks, ...query, title: 'Novel Ex', books: [{ title: 'Novel', author: 'John Doe' }], expectedConfidence: 0.75 },
+        // (0.2 * 1 + 0.1 * 0) / 0.3
+        { name: 'scores a result without an author as an author mismatch', ...googleBooks, ...query, books: [{ title: 'The Great Novel', author: null }], expectedConfidence: 2 / 3 },
+        { name: 'custom providers score the title truncated to 500 characters', ...customProvider, ...query, title: 'a'.repeat(600), author: '', books: [{ title: 'a'.repeat(500) }], expectedConfidence: 1.0 },
+        { name: 'custom providers leave results unscored without a title query', ...customProvider, ...query, title: '', isbn: '9780000000002', books: [perfectMatch], expectedConfidence: undefined },
+        { name: 'audiobookcovers leaves results without a title unscored', provider: 'audiobookcovers', providerApi: bookFinder.audiobookCovers, method: 'search', ...query, books: [{ cover: 'https://example.com/cover.png' }], expectedConfidence: undefined },
+        { name: 'cover searches without a library item stay unscored', ...googleBooks, ...query, libraryItem: null, books: [perfectMatch], expectedConfidence: undefined }
+      ]
+
+      beforeEach(() => {
+        runSearchStub.restore()
+      })
+
+      cases.forEach(({ name, provider, providerApi, method, libraryItem, title, author, isbn, books, expectedConfidence }) => {
+        it(name, async () => {
+          sinon.stub(providerApi, method).resolves(books.map((book) => ({ ...book })))
+          const results = await bookFinder.search(libraryItem, provider, title, author, isbn)
+          expect(results).to.have.lengthOf(books.length)
+          if (expectedConfidence === undefined) {
+            expect(results[0]).to.not.have.property('matchConfidence')
+          } else {
+            expect(results[0].matchConfidence).to.be.closeTo(expectedConfidence, 0.001)
+          }
+        })
       })
     })
   })
