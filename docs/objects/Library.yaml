@@ -78,7 +78,7 @@ components:
             type: string
           example: ['folderStructure', 'audioMetatags', 'nfoFile', 'txtFiles', 'opfFile', 'absMetadata']
         organizeFolderTemplate:
-          description: 'Book libraries only. Template for the folder path of a book below the library folder. Tokens are {author}, {authors}, {authorSort}, {authorInitial}, {series}, {sequence}, {sequencePadded}, {title}, {titleThe}, {titleIgnorePrefix} and {subtitle}. Also {year}, {originalYear}, {publishedDate}, {narrator}, {narrators}, {genre}, {genres}, {language}, {abridged} and {explicit}. Also {asin}, {isbn}, {publisher}, {codec}, {bitrate}, {channels}, {channelLayout} and {format}, from the first audio file. Text in <> is left out when a token inside it is empty.'
+          description: 'Book libraries only. Template for the folder path of a book below the library folder. Tokens are {author}, {authors}, {authorSort}, {authorInitial}, {series}, {sequence}, {sequencePadded}, {title}, {titleThe}, {titleIgnorePrefix} and {subtitle}. Also {year}, {originalYear}, {publishedDate}, {narrator}, {narrators}, {genre}, {genres}, {language}, {abridged} and {explicit}. Also {asin}, {isbn} and {publisher}. Audio tokens {codec}, {bitrate}, {channels}, {channelLayout} and {format} come from the first audio file. Text in <> is left out when a token inside it is empty.'
           type: string
           example: '{author}/{series}/<{sequence}. >{title}'
         organizeFileTemplate:

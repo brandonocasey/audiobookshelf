@@ -35,7 +35,7 @@ const MAX_TEMPLATE_LENGTH = 500
  * @property {number} [bitRate] Bits per second of the first audio file that plays
  * @property {number} [channels] Channel count of the first audio file that plays
  * @property {string} [channelLayout] Channel layout of the file being named, else of the first audio file that plays
- * @property {string} [format] Extension without the dot of the file being named, else of the first audio file that plays
+ * @property {string} [format] Extension without the dot. From the file being named, else the first audio file that plays
  * @property {string} [originalYear] Original year tag of the first audio file that plays
  *
  * @typedef TemplateFileValues
@@ -341,8 +341,8 @@ function getUploadedFileNames(fileTemplate, metadata, uploadedNames) {
 
 /**
  * Folder segments and new file names for an upload.
- * The upload form lacks sequence, narrator, year and audio details other than {format}, so those tokens render empty.
- * The folder's {format} comes from the first audio file in natural sort order, which is also the first track.
+ * The upload form has no sequence, narrator, year or audio details except {format}. Those tokens render empty.
+ * The folder's {format} comes from the first audio file by natural sort, which is the first track.
  *
  * @param {{organizeFolderTemplate:string, organizeFileTemplate:string}} librarySettings
  * @param {{title:string, author:string|null, series:string|null}} details

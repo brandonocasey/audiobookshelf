@@ -144,7 +144,7 @@ class MiscController {
   /**
    * POST: /api/upload/target
    * Body: { library, folder, title, author?, series?, fileNames? }
-   * Where an upload with these details and file names would be saved and whether that folder is taken
+   * Where an upload with these details would be saved, and whether that folder is taken
    *
    * @param {RequestWithUser} req
    * @param {Response} res

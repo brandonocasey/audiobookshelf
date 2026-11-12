@@ -38,7 +38,7 @@ const SERIES_SAMPLE = {
   }
 }
 
-/** A book with fewer details, so template groups around missing ones drop out */
+/** A book with fewer details, such as no series or subtitle */
 const STANDALONE_SAMPLE = {
   id: 'standalone',
   isFile: false,
@@ -66,7 +66,7 @@ function getTokenExamples() {
 }
 
 /**
- * Folder and file names the templates give the sample books, through the same rendering organize uses
+ * Folder and file names the templates give the sample books, rendered as organize renders them
  *
  * @param {string} folderTemplate Valid folder template
  * @param {string} fileTemplate Valid file template
@@ -93,6 +93,7 @@ function renderSamples(folderTemplate, fileTemplate) {
 function getTemplateExample(folderTemplate, fileTemplate) {
   const folderError = getTemplateSettingError('organizeFolderTemplate', folderTemplate)
   const fileError = getTemplateSettingError('organizeFileTemplate', fileTemplate)
+  // renderTarget throws on an invalid template, so render the default instead and blank its result
   const samples = renderSamples(folderError ? DEFAULT_FOLDER_TEMPLATE : folderTemplate, fileError ? DEFAULT_FILE_TEMPLATE : fileTemplate).map((sample) => ({
     id: sample.id,
     folder: folderError ? '' : sample.folder,
