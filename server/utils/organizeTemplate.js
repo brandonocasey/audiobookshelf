@@ -2,12 +2,15 @@ const Path = require('path')
 const { sanitizeFilename } = require('./fileUtils')
 const { checkFilepathIsAudioFile } = require('./scandir')
 const globals = require('./globals')
+const { nameToLastFirst } = require('./parsers/parseNameString')
+const { getTitlePrefixAtEnd } = require('./index')
 
 const DEFAULT_FOLDER_TEMPLATE = '{author}/{series}/<{sequence}. >{title}'
 const DEFAULT_FILE_TEMPLATE = '{title}< - Part {track}>'
 
-const FOLDER_TOKENS = ['author', 'authors', 'series', 'sequence', 'title', 'subtitle', 'year', 'narrator', 'asin', 'isbn', 'publisher']
-const FILE_TOKENS = [...FOLDER_TOKENS, 'track', 'disc']
+const FOLDER_TOKENS = ['author', 'authors', 'authorSort', 'authorInitial', 'series', 'sequence', 'sequencePadded', 'title', 'titleThe', 'subtitle', 'year', 'publishedDate', 'narrator', 'narrators', 'genre', 'genres', 'language', 'abridged', 'explicit', 'asin', 'isbn', 'publisher', 'codec', 'bitrate', 'channels']
+const FILE_TOKENS = [...FOLDER_TOKENS, 'track', 'trackTotal', 'trackTitle', 'disc']
+const SEQUENCE_PAD_LENGTH = 2
 const MAX_TEMPLATE_LENGTH = 500
 
 /**
@@ -19,10 +22,24 @@ const MAX_TEMPLATE_LENGTH = 500
  * @property {string[]} [authors]
  * @property {{name:string, sequence?:string|null}[]} [series]
  * @property {string[]} [narrators]
+ * @property {string[]} [genres]
  * @property {string|number} [publishedYear]
+ * @property {string} [publishedDate]
+ * @property {string} [language]
+ * @property {boolean} [abridged]
+ * @property {boolean} [explicit]
  * @property {string} [asin]
  * @property {string} [isbn]
  * @property {string} [publisher]
+ * @property {string} [codec] Codec of the first audio file that plays
+ * @property {number} [bitRate] Bits per second of the first audio file that plays
+ * @property {number} [channels] Channel count of the first audio file that plays
+ *
+ * @typedef TemplateFileValues
+ * @property {string} [track]
+ * @property {string} [trackTotal]
+ * @property {string} [trackTitle]
+ * @property {string} [disc]
  */
 
 /**
@@ -162,29 +179,80 @@ function getTemplateSettingError(key, template) {
 }
 
 /**
- * Token values for a book. Missing details are empty strings so their template groups drop out.
+ * Zero-pads a sequence's leading number, so "2" sorts before "10" and "1.5" becomes "01.5".
  *
+ * @param {string} sequence
+ * @returns {string}
+ */
+function padSequence(sequence) {
+  return sequence.replace(/^\d+/, (digits) => digits.padStart(SEQUENCE_PAD_LENGTH, '0'))
+}
+
+const cleanValue = (value) => sanitizeFilename(String(value ?? '')) || ''
+const cleanValues = (values) => (values || []).map(cleanValue).filter(Boolean)
+
+/**
  * @param {TemplateMetadata} metadata
- * @param {{track?:string, disc?:string}} [fileValues]
  * @returns {Object<string,string>}
  */
-function getTemplateValues(metadata, fileValues = {}) {
-  const clean = (value) => sanitizeFilename(String(value ?? '')) || ''
-  const authors = (metadata.authors || []).map(clean).filter(Boolean)
-  const firstSeries = metadata.series?.[0]
+function getAuthorValues(metadata) {
+  const authors = cleanValues(metadata.authors)
+  const authorSort = authors[0] ? cleanValue(nameToLastFirst(metadata.authors.find((name) => cleanValue(name)))) : ''
   return {
     author: authors[0] || '',
     authors: authors.join(', '),
-    series: clean(firstSeries?.name),
-    sequence: clean(firstSeries?.sequence),
-    title: clean(metadata.title),
-    subtitle: clean(metadata.subtitle),
-    year: clean(metadata.publishedYear),
-    narrator: clean(metadata.narrators?.[0]),
-    asin: clean(metadata.asin),
-    isbn: clean(metadata.isbn),
-    publisher: clean(metadata.publisher),
+    authorSort,
+    authorInitial: Array.from(authorSort)[0]?.toUpperCase() || ''
+  }
+}
+
+/**
+ * @param {TemplateMetadata} metadata
+ * @returns {Object<string,string>}
+ */
+function getAudioValues(metadata) {
+  return {
+    codec: cleanValue(metadata.codec),
+    bitrate: metadata.bitRate ? String(Math.round(metadata.bitRate / 1000)) : '',
+    channels: cleanValue(metadata.channels)
+  }
+}
+
+/**
+ * Token values for a book. Missing details are empty strings so their template groups drop out.
+ *
+ * @param {TemplateMetadata} metadata
+ * @param {TemplateFileValues} [fileValues]
+ * @returns {Object<string,string>}
+ */
+function getTemplateValues(metadata, fileValues = {}) {
+  const genres = cleanValues(metadata.genres)
+  const firstSeries = metadata.series?.[0]
+  const sequence = cleanValue(firstSeries?.sequence)
+  return {
+    ...getAuthorValues(metadata),
+    ...getAudioValues(metadata),
+    series: cleanValue(firstSeries?.name),
+    sequence,
+    sequencePadded: padSequence(sequence),
+    title: cleanValue(metadata.title),
+    titleThe: cleanValue(getTitlePrefixAtEnd(metadata.title?.trim())),
+    subtitle: cleanValue(metadata.subtitle),
+    year: cleanValue(metadata.publishedYear),
+    publishedDate: cleanValue(metadata.publishedDate),
+    narrator: cleanValue(metadata.narrators?.[0]),
+    narrators: cleanValues(metadata.narrators).join(', '),
+    genre: genres[0] || '',
+    genres: genres.join(', '),
+    language: cleanValue(metadata.language),
+    abridged: metadata.abridged ? 'Abridged' : '',
+    explicit: metadata.explicit ? 'Explicit' : '',
+    asin: cleanValue(metadata.asin),
+    isbn: cleanValue(metadata.isbn),
+    publisher: cleanValue(metadata.publisher),
     track: fileValues.track || '',
+    trackTotal: fileValues.trackTotal || '',
+    trackTitle: cleanValue(fileValues.trackTitle),
     disc: fileValues.disc || ''
   }
 }
@@ -237,22 +305,24 @@ const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity
  * Returns no renames when the new names would collide.
  *
  * @param {string} fileTemplate
- * @param {Object<string,string>} values
+ * @param {TemplateMetadata} metadata
  * @param {string[]} uploadedNames
  * @returns {Map<string,string>} Uploaded name to new name, only for files that are renamed
  */
-function getUploadedFileNames(fileTemplate, values, uploadedNames) {
+function getUploadedFileNames(fileTemplate, metadata, uploadedNames) {
   const extOf = (name) => Path.extname(name).slice(1).toLowerCase()
   const audioNames = uploadedNames.filter(checkFilepathIsAudioFile).sort(naturalCompare)
   const ebookNames = uploadedNames.filter((name) => globals.SupportedEbookTypes.includes(extOf(name)))
 
+  const renderUploadedName = (name, fileValues) => renderFileName(fileTemplate, getTemplateValues(metadata, fileValues), Path.extname(name)) || sanitizeFilename(name)
+
   const newNames = new Map()
   audioNames.forEach((name, i) => {
-    const fileValues = { ...values, track: formatTrackNumber(i + 1, audioNames.length) }
-    newNames.set(name, renderFileName(fileTemplate, fileValues, Path.extname(name)) || sanitizeFilename(name))
+    const trackTotal = audioNames.length > 1 ? String(audioNames.length) : ''
+    newNames.set(name, renderUploadedName(name, { track: formatTrackNumber(i + 1, audioNames.length), trackTotal }))
   })
   if (ebookNames.length === 1) {
-    newNames.set(ebookNames[0], renderFileName(fileTemplate, values, Path.extname(ebookNames[0])) || sanitizeFilename(ebookNames[0]))
+    newNames.set(ebookNames[0], renderUploadedName(ebookNames[0], {}))
   }
 
   const lowerNewNames = [...newNames.values()].map((name) => name.toLowerCase())
@@ -261,7 +331,7 @@ function getUploadedFileNames(fileTemplate, values, uploadedNames) {
 
 /**
  * Folder segments and new file names for an upload.
- * The upload form has no sequence, narrator or year, so those tokens render empty.
+ * The upload form lacks sequence, narrator, year and audio details, so those tokens render empty.
  *
  * @param {{organizeFolderTemplate:string, organizeFileTemplate:string}} librarySettings
  * @param {{title:string, author:string|null, series:string|null}} details
@@ -269,14 +339,14 @@ function getUploadedFileNames(fileTemplate, values, uploadedNames) {
  * @returns {{folderSegments:string[], newNames:Map<string,string>}}
  */
 function getUploadLayout(librarySettings, details, uploadedNames) {
-  const values = getTemplateValues({
+  const metadata = {
     title: details.title,
     authors: details.author ? [details.author] : [],
     series: details.series ? [{ name: details.series }] : []
-  })
+  }
   return {
-    folderSegments: renderFolderSegments(librarySettings.organizeFolderTemplate, values),
-    newNames: getUploadedFileNames(librarySettings.organizeFileTemplate, values, uploadedNames)
+    folderSegments: renderFolderSegments(librarySettings.organizeFolderTemplate, getTemplateValues(metadata)),
+    newNames: getUploadedFileNames(librarySettings.organizeFileTemplate, metadata, uploadedNames)
   }
 }
 
@@ -285,12 +355,21 @@ const SAMPLE_BOOK = {
   subtitle: 'Book One of the Stormlight Archive',
   authors: ['Brandon Sanderson'],
   series: [{ name: 'The Stormlight Archive', sequence: '1' }],
-  narrators: ['Michael Kramer'],
+  narrators: ['Michael Kramer', 'Kate Reading'],
+  genres: ['Fantasy', 'Epic'],
   publishedYear: 2010,
+  publishedDate: '2010-08-31',
+  language: 'English',
+  abridged: false,
+  explicit: false,
   asin: 'B003ZWFO7E',
   isbn: '9780765326355',
-  publisher: 'Tor Books'
+  publisher: 'Tor Books',
+  codec: 'aac',
+  bitRate: 64000,
+  channels: 2
 }
+const SAMPLE_FILE = { track: '01', trackTotal: '12', trackTitle: 'Prelude to the Stormlight Archive', disc: '1' }
 
 /**
  * Render the templates for a sample book
@@ -302,7 +381,7 @@ const SAMPLE_BOOK = {
 function getTemplateExample(folderTemplate, fileTemplate) {
   const folderError = getTemplateSettingError('organizeFolderTemplate', folderTemplate)
   const fileError = getTemplateSettingError('organizeFileTemplate', fileTemplate)
-  const values = getTemplateValues(SAMPLE_BOOK, { track: '01', disc: '1' })
+  const values = getTemplateValues(SAMPLE_BOOK, SAMPLE_FILE)
   return {
     folder: folderError ? '' : renderFolderSegments(folderTemplate, values).join('/'),
     folderError,

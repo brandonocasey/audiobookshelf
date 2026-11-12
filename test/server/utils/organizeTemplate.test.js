@@ -5,15 +5,107 @@ const Logger = require('../../../server/Logger')
 const { DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE, getTemplateSettingError, getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumber, getUploadLayout, getTemplateExample } = require('../../../server/utils/organizeTemplate')
 
 describe('organizeTemplate', () => {
+  const previousServerSettings = global.ServerSettings
+
   beforeEach(() => {
     sinon.stub(Logger, 'debug')
+    global.ServerSettings = { sortingPrefixes: ['the', 'a'] }
   })
 
   afterEach(() => {
     sinon.restore()
+    global.ServerSettings = previousServerSettings
   })
 
   const book = { title: 'The Way of Kings', authors: ['Brandon Sanderson', 'Someone Else'], series: [{ name: 'The Stormlight Archive', sequence: '1' }], narrators: ['Michael Kramer'], publishedYear: 2010, asin: 'B003ZWFO7E' }
+
+  describe('new tokens', () => {
+    const fullBook = {
+      ...book,
+      authors: ['Brandon Sanderson', 'Someone Else'],
+      narrators: ['Michael Kramer', 'Kate Reading'],
+      genres: ['Fantasy', 'Epic'],
+      publishedDate: '2010-08-31',
+      language: 'English',
+      abridged: true,
+      explicit: true,
+      codec: 'aac',
+      bitRate: 64000,
+      channels: 2
+    }
+    const fileValues = { track: '02', trackTotal: '12', trackTitle: 'Chapter: Two', disc: '1' }
+
+    it('renders each book token', () => {
+      const values = getTemplateValues(fullBook)
+      const rendered = {
+        authorSort: 'Sanderson, Brandon',
+        authorInitial: 'S',
+        titleThe: 'Way of Kings, The',
+        sequencePadded: '01',
+        narrators: 'Michael Kramer, Kate Reading',
+        genre: 'Fantasy',
+        genres: 'Fantasy, Epic',
+        language: 'English',
+        publishedDate: '2010-08-31',
+        abridged: 'Abridged',
+        explicit: 'Explicit',
+        codec: 'aac',
+        bitrate: '64',
+        channels: '2'
+      }
+      for (const [token, expected] of Object.entries(rendered)) {
+        expect(renderFolderSegments(`{${token}}`, values), token).to.deep.equal([expected])
+      }
+    })
+
+    it('renders each file token and cleans names from the file', () => {
+      const values = getTemplateValues(fullBook, fileValues)
+      expect(renderFileName('{trackTitle}, {track} of {trackTotal}, {disc}', values, '.mp3')).to.equal('Chapter - Two, 02 of 12, 1.mp3')
+    })
+
+    it('renders them empty when the details are missing so their groups drop out', () => {
+      const values = getTemplateValues({ title: 'Solo', authors: [] })
+      const template = '{title}< {authorSort}>< {genre}>< ({abridged})>< {codec}>< {bitrate}k>< {trackTitle}>'
+      expect(renderFileName(template, values, '.mp3')).to.equal('Solo.mp3')
+    })
+
+    it('pads only the leading number of a sequence', () => {
+      const padded = (sequence) => getTemplateValues({ ...book, series: [{ name: 'S', sequence }] }).sequencePadded
+      expect(['2', '10', '100', '1.5', '0.5', 'Book 1', ''].map(padded)).to.deep.equal(['02', '10', '100', '01.5', '00.5', 'Book 1', ''])
+    })
+
+    it('takes the first letter of the sorted first author in upper case, including accented and astral characters', () => {
+      const initial = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorInitial
+      expect(['brandon sanderson', 'élodie', '𠮷野', '3 Doors Down'].map(initial)).to.deep.equal(['S', 'É', '𠮷', 'D'])
+    })
+
+    it('moves the sorting prefix of a title to the end, also around spaces', () => {
+      const titleThe = (title) => getTemplateValues({ title }).titleThe
+      expect(['The Way of Kings', '  The Spaces  ', 'A Game of Thrones', "Ender's Game", 'The', ''].map(titleThe)).to.deep.equal(['Way of Kings, The', 'Spaces, The', 'Game of Thrones, A', "Ender's Game", 'The', ''])
+    })
+
+    it('sorts the first author as last name first, and keeps a single name', () => {
+      const sorted = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorSort
+      expect(['Arthur Conan Doyle', 'Plato'].map(sorted)).to.deep.equal(['Doyle, Arthur Conan', 'Plato'])
+    })
+
+    it('accepts the new tokens in templates and still rejects unknown and file-only ones in folders', () => {
+      expect(getTemplateSettingError('organizeFolderTemplate', '{authorSort}/{titleThe}')).to.equal(null)
+      expect(getTemplateSettingError('organizeFileTemplate', '{authorSort} {trackTitle} {trackTotal}')).to.equal(null)
+      expect(getTemplateSettingError('organizeFolderTemplate', '{trackTitle}')).to.equal('Unknown token "{trackTitle}"')
+      expect(getTemplateSettingError('organizeFolderTemplate', '{authorsort}')).to.equal('Unknown token "{authorsort}"')
+    })
+
+    it('fills {trackTotal} and the title and author tokens for uploads and leaves the rest empty', () => {
+      const settings = { organizeFolderTemplate: '{authorInitial}/{authorSort}/{titleThe}', organizeFileTemplate: '{titleThe}< [{trackTotal}]> {track}< {codec}>' }
+      const { folderSegments, newNames } = getUploadLayout(settings, { title: 'The Hobbit', author: 'J. Tolkien', series: null }, ['Part 1.mp3', 'Part 2.mp3', 'cover.jpg'])
+      expect(folderSegments).to.deep.equal(['T', 'Tolkien, J', 'Hobbit, The'])
+      expect([...newNames]).to.deep.equal([
+        ['Part 1.mp3', 'Hobbit, The [2] 1.mp3'],
+        ['Part 2.mp3', 'Hobbit, The [2] 2.mp3']
+      ])
+    })
+  })
 
   describe('renderFolderSegments', () => {
     it('renders the default template with every detail present', () => {
