@@ -579,9 +579,6 @@ const MATCH_CONFIDENCE_TOLERANCE = 1e-14
 
 const PERCENT_PER_FRACTION = 100
 
-/**
- * Skip warnings show the match confidence to this many decimal places of a percent
- */
 const MATCH_CONFIDENCE_PERCENT_DECIMALS = 2
 
 /**
