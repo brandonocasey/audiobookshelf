@@ -2540,7 +2540,7 @@ describe('OrganizeManager', () => {
       expect(await Database.libraryModel.count()).to.equal(1)
     })
 
-    it('starts organizing the whole library when a template changes, and only then', async () => {
+    it('starts organizing the whole library when a template changes with auto organize on, and only then', async () => {
       const organizeLibrary = sinon.stub(manager, 'organizeLibrary')
       const context = { organizeManager: manager }
       const update = (settings) => LibraryController.update.call(context, { user: adminUser, body: { settings }, library }, makeRes())
@@ -2553,8 +2553,11 @@ describe('OrganizeManager', () => {
       expect(organizeLibrary.called).to.be.false
 
       await update({ organizeFileTemplate: '{title}' })
-      expect(organizeLibrary.calledOnceWithExactly(library.id)).to.be.true
+      expect(organizeLibrary.called).to.be.false
       expect(library.settings.organizeFileTemplate).to.equal('{title}')
+
+      await update({ autoOrganize: true, organizeFileTemplate: '{title}< - {track}>' })
+      expect(organizeLibrary.calledOnceWithExactly(library.id)).to.be.true
     })
 
     it('treats a library saved before the organize settings existed as using the defaults', async () => {
@@ -2567,7 +2570,7 @@ describe('OrganizeManager', () => {
       expect(organizeLibrary.called).to.be.false
       expect(oldLibrary.toOldJSON().settings).to.include({ organizeFileTemplate: '{title}< - Part {track}>', autoOrganize: false })
 
-      await update({ organizeFolderTemplate: '{title}' })
+      await update({ autoOrganize: true, organizeFolderTemplate: '{title}' })
       expect(organizeLibrary.calledOnce).to.be.true
     })
 
