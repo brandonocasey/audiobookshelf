@@ -236,7 +236,7 @@ function getTemplateValues(metadata, fileValues = {}) {
     sequence,
     sequencePadded: padSequence(sequence),
     title: cleanValue(metadata.title),
-    titleThe: cleanValue(getTitlePrefixAtEnd(metadata.title)),
+    titleThe: cleanValue(getTitlePrefixAtEnd(metadata.title?.trim())),
     subtitle: cleanValue(metadata.subtitle),
     year: cleanValue(metadata.publishedYear),
     publishedDate: cleanValue(metadata.publishedDate),

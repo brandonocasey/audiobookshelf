@@ -79,6 +79,11 @@ describe('organizeTemplate', () => {
       expect(['brandon sanderson', 'élodie', '𠮷野', '3 Doors Down'].map(initial)).to.deep.equal(['S', 'É', '𠮷', 'D'])
     })
 
+    it('moves the sorting prefix of a title to the end, also around spaces', () => {
+      const titleThe = (title) => getTemplateValues({ title }).titleThe
+      expect(['The Way of Kings', '  The Spaces  ', 'A Game of Thrones', "Ender's Game", 'The', ''].map(titleThe)).to.deep.equal(['Way of Kings, The', 'Spaces, The', 'Game of Thrones, A', "Ender's Game", 'The', ''])
+    })
+
     it('sorts the first author as last name first, and keeps a single name', () => {
       const sorted = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorSort
       expect(['Arthur Conan Doyle', 'Plato'].map(sorted)).to.deep.equal(['Doyle, Arthur Conan', 'Plato'])
