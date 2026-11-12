@@ -3,13 +3,13 @@ const { sanitizeFilename } = require('./fileUtils')
 const { checkFilepathIsAudioFile } = require('./scandir')
 const globals = require('./globals')
 const { nameToLastFirst } = require('./parsers/parseNameString')
-const { getTitlePrefixAtEnd } = require('./index')
+const { getTitlePrefixAtEnd, getTitleIgnorePrefix, elapsedPretty } = require('./index')
 
 const DEFAULT_FOLDER_TEMPLATE = '{author}/{series}/<{sequence}. >{title}'
 const DEFAULT_FILE_TEMPLATE = '{title}< - Part {track}>'
 
-const FOLDER_TOKENS = ['author', 'authors', 'authorSort', 'authorInitial', 'series', 'sequence', 'sequencePadded', 'title', 'titleThe', 'subtitle', 'year', 'publishedDate', 'narrator', 'narrators', 'genre', 'genres', 'language', 'abridged', 'explicit', 'asin', 'isbn', 'publisher', 'codec', 'bitrate', 'channels']
-const FILE_TOKENS = [...FOLDER_TOKENS, 'track', 'trackTotal', 'trackTitle', 'disc']
+const FOLDER_TOKENS = ['author', 'authors', 'authorSort', 'authorInitial', 'series', 'sequence', 'sequencePadded', 'title', 'titleThe', 'titleIgnorePrefix', 'subtitle', 'year', 'originalYear', 'publishedDate', 'narrator', 'narrators', 'genre', 'genres', 'language', 'abridged', 'explicit', 'asin', 'isbn', 'publisher', 'codec', 'bitrate', 'channels', 'channelLayout', 'format']
+const FILE_TOKENS = [...FOLDER_TOKENS, 'track', 'trackTotal', 'trackTitle', 'disc', 'duration']
 const SEQUENCE_PAD_LENGTH = 2
 const MAX_TEMPLATE_LENGTH = 500
 
@@ -31,15 +31,19 @@ const MAX_TEMPLATE_LENGTH = 500
  * @property {string} [asin]
  * @property {string} [isbn]
  * @property {string} [publisher]
- * @property {string} [codec] Codec of the first audio file that plays
- * @property {number} [bitRate] Bits per second of the first audio file that plays
- * @property {number} [channels] Channel count of the first audio file that plays
+ * @property {string} [codec] Codec of the file being named, else of the first playable audio file
+ * @property {number} [bitRate] Bits per second of the file being named, else of the first playable audio file
+ * @property {number} [channels] Channel count of the file being named, else of the first playable audio file
+ * @property {string} [channelLayout] Channel layout of the file being named, else of the first playable audio file
+ * @property {string} [format] Extension without the dot. From the file being named, else the first playable audio file
+ * @property {string} [originalYear] Original year tag of the first audio file that plays
  *
  * @typedef TemplateFileValues
  * @property {string} [track]
  * @property {string} [trackTotal]
  * @property {string} [trackTitle]
  * @property {string} [disc]
+ * @property {number} [duration] Seconds
  */
 
 /**
@@ -214,7 +218,9 @@ function getAudioValues(metadata) {
   return {
     codec: cleanValue(metadata.codec),
     bitrate: metadata.bitRate ? String(Math.round(metadata.bitRate / 1000)) : '',
-    channels: cleanValue(metadata.channels)
+    channels: cleanValue(metadata.channels),
+    channelLayout: cleanValue(metadata.channelLayout),
+    format: cleanValue(metadata.format).toLowerCase()
   }
 }
 
@@ -237,8 +243,10 @@ function getTemplateValues(metadata, fileValues = {}) {
     sequencePadded: padSequence(sequence),
     title: cleanValue(metadata.title),
     titleThe: cleanValue(getTitlePrefixAtEnd(metadata.title?.trim())),
+    titleIgnorePrefix: cleanValue(getTitleIgnorePrefix(metadata.title?.trim())),
     subtitle: cleanValue(metadata.subtitle),
     year: cleanValue(metadata.publishedYear),
+    originalYear: cleanValue(metadata.originalYear),
     publishedDate: cleanValue(metadata.publishedDate),
     narrator: cleanValue(metadata.narrators?.[0]),
     narrators: cleanValues(metadata.narrators).join(', '),
@@ -253,7 +261,8 @@ function getTemplateValues(metadata, fileValues = {}) {
     track: fileValues.track || '',
     trackTotal: fileValues.trackTotal || '',
     trackTitle: cleanValue(fileValues.trackTitle),
-    disc: fileValues.disc || ''
+    disc: fileValues.disc || '',
+    duration: fileValues.duration ? elapsedPretty(fileValues.duration) : ''
   }
 }
 
@@ -299,6 +308,8 @@ function formatTrackNumber(position, count) {
 }
 
 const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
+const getFileFormat = (name) => Path.extname(name).slice(1).toLowerCase()
+const getSortedAudioNames = (names) => names.filter(checkFilepathIsAudioFile).sort(naturalCompare)
 
 /**
  * New names for uploaded audio files (numbered in natural sort order) and a lone ebook.
@@ -310,11 +321,10 @@ const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity
  * @returns {Map<string,string>} Uploaded name to new name, only for files that are renamed
  */
 function getUploadedFileNames(fileTemplate, metadata, uploadedNames) {
-  const extOf = (name) => Path.extname(name).slice(1).toLowerCase()
-  const audioNames = uploadedNames.filter(checkFilepathIsAudioFile).sort(naturalCompare)
-  const ebookNames = uploadedNames.filter((name) => globals.SupportedEbookTypes.includes(extOf(name)))
+  const audioNames = getSortedAudioNames(uploadedNames)
+  const ebookNames = uploadedNames.filter((name) => globals.SupportedEbookTypes.includes(getFileFormat(name)))
 
-  const renderUploadedName = (name, fileValues) => renderFileName(fileTemplate, getTemplateValues(metadata, fileValues), Path.extname(name)) || sanitizeFilename(name)
+  const renderUploadedName = (name, fileValues) => renderFileName(fileTemplate, getTemplateValues({ ...metadata, format: getFileFormat(name) }, fileValues), Path.extname(name)) || sanitizeFilename(name)
 
   const newNames = new Map()
   audioNames.forEach((name, i) => {
@@ -331,7 +341,8 @@ function getUploadedFileNames(fileTemplate, metadata, uploadedNames) {
 
 /**
  * Folder segments and new file names for an upload.
- * The upload form lacks sequence, narrator, year and audio details, so those tokens render empty.
+ * The upload form has no sequence, narrator, year or audio details except {format}. Those tokens render empty.
+ * The folder's {format} comes from the first audio file in natural sort order. That file is the first track.
  *
  * @param {{organizeFolderTemplate:string, organizeFileTemplate:string}} librarySettings
  * @param {{title:string, author:string|null, series:string|null}} details
@@ -339,54 +350,16 @@ function getUploadedFileNames(fileTemplate, metadata, uploadedNames) {
  * @returns {{folderSegments:string[], newNames:Map<string,string>}}
  */
 function getUploadLayout(librarySettings, details, uploadedNames) {
+  const firstAudioName = getSortedAudioNames(uploadedNames)[0]
   const metadata = {
     title: details.title,
     authors: details.author ? [details.author] : [],
-    series: details.series ? [{ name: details.series }] : []
+    series: details.series ? [{ name: details.series }] : [],
+    format: firstAudioName ? getFileFormat(firstAudioName) : undefined
   }
   return {
     folderSegments: renderFolderSegments(librarySettings.organizeFolderTemplate, getTemplateValues(metadata)),
     newNames: getUploadedFileNames(librarySettings.organizeFileTemplate, metadata, uploadedNames)
-  }
-}
-
-const SAMPLE_BOOK = {
-  title: 'The Way of Kings',
-  subtitle: 'Book One of the Stormlight Archive',
-  authors: ['Brandon Sanderson'],
-  series: [{ name: 'The Stormlight Archive', sequence: '1' }],
-  narrators: ['Michael Kramer', 'Kate Reading'],
-  genres: ['Fantasy', 'Epic'],
-  publishedYear: 2010,
-  publishedDate: '2010-08-31',
-  language: 'English',
-  abridged: false,
-  explicit: false,
-  asin: 'B003ZWFO7E',
-  isbn: '9780765326355',
-  publisher: 'Tor Books',
-  codec: 'aac',
-  bitRate: 64000,
-  channels: 2
-}
-const SAMPLE_FILE = { track: '01', trackTotal: '12', trackTitle: 'Prelude to the Stormlight Archive', disc: '1' }
-
-/**
- * Render the templates for a sample book
- *
- * @param {string} folderTemplate
- * @param {string} fileTemplate
- * @returns {{folder:string, folderError:string|null, file:string, fileError:string|null}}
- */
-function getTemplateExample(folderTemplate, fileTemplate) {
-  const folderError = getTemplateSettingError('organizeFolderTemplate', folderTemplate)
-  const fileError = getTemplateSettingError('organizeFileTemplate', fileTemplate)
-  const values = getTemplateValues(SAMPLE_BOOK, SAMPLE_FILE)
-  return {
-    folder: folderError ? '' : renderFolderSegments(folderTemplate, values).join('/'),
-    folderError,
-    file: fileError ? '' : renderFileName(fileTemplate, values, '.mp3'),
-    fileError
   }
 }
 
@@ -401,6 +374,5 @@ module.exports = {
   renderFolderSegments,
   renderFileName,
   formatTrackNumber,
-  getUploadLayout,
-  getTemplateExample
+  getUploadLayout
 }

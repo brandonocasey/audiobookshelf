@@ -42,6 +42,20 @@ function getPlayableAudioFiles({ media, isFile }) {
 }
 
 /**
+ * @param {import('../models/Book').AudioFileObject|null|undefined} audioFile
+ * @returns {{codec:string|undefined, bitRate:number|undefined, channels:number|undefined, channelLayout:string|undefined, format:string|undefined}}
+ */
+function getAudioDetails(audioFile) {
+  return {
+    codec: audioFile?.codec,
+    bitRate: audioFile?.bitRate,
+    channels: audioFile?.channels,
+    channelLayout: audioFile?.channelLayout,
+    format: audioFile?.metadata.ext.slice(1)
+  }
+}
+
+/**
  * @param {import('../models/LibraryItem')} libraryItem Book library item with authors and series loaded
  * @returns {import('./organizeTemplate').TemplateMetadata}
  */
@@ -63,18 +77,18 @@ function getTemplateMetadata(libraryItem) {
     asin: media.asin,
     isbn: media.isbn,
     publisher: media.publisher,
-    codec: firstAudioFile?.codec,
-    bitRate: firstAudioFile?.bitRate,
-    channels: firstAudioFile?.channels
+    ...getAudioDetails(firstAudioFile),
+    originalYear: firstAudioFile?.metaTags?.tagOriginalYear
   }
 }
 
 /**
  * Playable audio files in play order, then the ebook, with their file template values.
+ * Each file's own format and audio details replace the first audio file's in its name.
  * Excluded audio files keep their names.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
- * @returns {{path:string, filename:string, ext:string, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
+ * @returns {{path:string, filename:string, ext:string, fileMetadata:ReturnType<typeof getAudioDetails>, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
  */
 function getFilesToRename(libraryItem) {
   const { media } = libraryItem
@@ -86,19 +100,39 @@ function getFilesToRename(libraryItem) {
       path,
       filename,
       ext,
+      fileMetadata: getAudioDetails(audioFile),
       fileValues: {
         track: formatTrackNumber(i + 1, audioFiles.length),
         trackTotal: audioFiles.length > 1 ? String(audioFiles.length) : '',
         trackTitle: audioFile.metaTags?.tagTitle,
-        disc: disc === null || disc === undefined ? '' : String(disc)
+        disc: disc === null || disc === undefined ? '' : String(disc),
+        duration: audioFile.duration
       }
     }
   })
   if (media.ebookFile) {
     const { path, filename, ext } = media.ebookFile.metadata
-    files.push({ path, filename, ext, fileValues: {} })
+    // The empty audio details override the first audio file's, so an ebook name gets none
+    files.push({ path, filename, ext, fileMetadata: { ...getAudioDetails(null), format: ext.slice(1) }, fileValues: {} })
   }
   return files
+}
+
+/**
+ * Token values for the book folder and for each file to rename
+ *
+ * @param {import('../models/LibraryItem')} libraryItem Book library item
+ * @returns {{folderValues:Object<string,string>, files:{path:string, filename:string, ext:string, values:Object<string,string>}[]}}
+ */
+function getTargetValues(libraryItem) {
+  const metadata = getTemplateMetadata(libraryItem)
+  const files = getFilesToRename(libraryItem).map((file) => ({
+    path: file.path,
+    filename: file.filename,
+    ext: file.ext,
+    values: getTemplateValues({ ...metadata, ...file.fileMetadata }, file.fileValues)
+  }))
+  return { folderValues: getTemplateValues(metadata), files }
 }
 
 /**
@@ -109,14 +143,15 @@ function getFilesToRename(libraryItem) {
  * @returns {{segments:string[], files:{path:string, filename:string, newName:string}[]}} Folder segments below the library folder and the new name of each file
  */
 function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplate }) {
-  const metadata = getTemplateMetadata(libraryItem)
-  const segments = renderFolderSegments(organizeFolderTemplate, getTemplateValues(metadata))
-  const files = getFilesToRename(libraryItem).map((file) => ({
-    path: file.path,
-    filename: file.filename,
-    newName: renderFileName(organizeFileTemplate, getTemplateValues(metadata, file.fileValues), file.ext) || file.filename
-  }))
-  return { segments, files }
+  const { folderValues, files } = getTargetValues(libraryItem)
+  return {
+    segments: renderFolderSegments(organizeFolderTemplate, folderValues),
+    files: files.map((file) => ({
+      path: file.path,
+      filename: file.filename,
+      newName: renderFileName(organizeFileTemplate, file.values, file.ext) || file.filename
+    }))
+  }
 }
 
 /**
@@ -494,4 +529,4 @@ function planToClientJSON(plan) {
   return { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
 }
 
-module.exports = { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON }
+module.exports = { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON, getTargetValues, renderTarget }

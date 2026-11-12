@@ -2,7 +2,7 @@ const { expect } = require('chai')
 const sinon = require('sinon')
 
 const Logger = require('../../../server/Logger')
-const { DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE, getTemplateSettingError, getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumber, getUploadLayout, getTemplateExample } = require('../../../server/utils/organizeTemplate')
+const { DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE, getTemplateSettingError, getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumber, getUploadLayout } = require('../../../server/utils/organizeTemplate')
 
 describe('organizeTemplate', () => {
   const previousServerSettings = global.ServerSettings
@@ -31,9 +31,12 @@ describe('organizeTemplate', () => {
       explicit: true,
       codec: 'aac',
       bitRate: 64000,
-      channels: 2
+      channels: 2,
+      channelLayout: '5.1(side)',
+      format: 'M4B',
+      originalYear: '1996'
     }
-    const fileValues = { track: '02', trackTotal: '12', trackTitle: 'Chapter: Two', disc: '1' }
+    const fileValues = { track: '02', trackTotal: '12', trackTitle: 'Chapter: Two', disc: '1', duration: 5000 }
 
     it('renders each book token', () => {
       const values = getTemplateValues(fullBook)
@@ -41,6 +44,8 @@ describe('organizeTemplate', () => {
         authorSort: 'Sanderson, Brandon',
         authorInitial: 'S',
         titleThe: 'Way of Kings, The',
+        titleIgnorePrefix: 'Way of Kings',
+        originalYear: '1996',
         sequencePadded: '01',
         narrators: 'Michael Kramer, Kate Reading',
         genre: 'Fantasy',
@@ -51,7 +56,9 @@ describe('organizeTemplate', () => {
         explicit: 'Explicit',
         codec: 'aac',
         bitrate: '64',
-        channels: '2'
+        channels: '2',
+        channelLayout: '5.1(side)',
+        format: 'm4b'
       }
       for (const [token, expected] of Object.entries(rendered)) {
         expect(renderFolderSegments(`{${token}}`, values), token).to.deep.equal([expected])
@@ -60,12 +67,12 @@ describe('organizeTemplate', () => {
 
     it('renders each file token and cleans names from the file', () => {
       const values = getTemplateValues(fullBook, fileValues)
-      expect(renderFileName('{trackTitle}, {track} of {trackTotal}, {disc}', values, '.mp3')).to.equal('Chapter - Two, 02 of 12, 1.mp3')
+      expect(renderFileName('{trackTitle}, {track} of {trackTotal}, {disc}, {duration}', values, '.mp3')).to.equal('Chapter - Two, 02 of 12, 1, 1 hr 23 min.mp3')
     })
 
     it('renders them empty when the details are missing so their groups drop out', () => {
       const values = getTemplateValues({ title: 'Solo', authors: [] })
-      const template = '{title}< {authorSort}>< {genre}>< ({abridged})>< {codec}>< {bitrate}k>< {trackTitle}>'
+      const template = '{title}< {authorSort}>< {genre}>< ({abridged})>< {codec}>< {bitrate}k>< {trackTitle}>< {originalYear}>< {format}>< {channelLayout}>< {duration}>'
       expect(renderFileName(template, values, '.mp3')).to.equal('Solo.mp3')
     })
 
@@ -84,6 +91,11 @@ describe('organizeTemplate', () => {
       expect(['The Way of Kings', '  The Spaces  ', 'A Game of Thrones', "Ender's Game", 'The', ''].map(titleThe)).to.deep.equal(['Way of Kings, The', 'Spaces, The', 'Game of Thrones, A', "Ender's Game", 'The', ''])
     })
 
+    it('removes the sorting prefix of a title, also around spaces', () => {
+      const titleIgnorePrefix = (title) => getTemplateValues({ title }).titleIgnorePrefix
+      expect(['The Way of Kings', '  The Spaces  ', "Ender's Game", 'The', ''].map(titleIgnorePrefix)).to.deep.equal(['Way of Kings', 'Spaces', "Ender's Game", 'The', ''])
+    })
+
     it('sorts the first author as last name first, and keeps a single name', () => {
       const sorted = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorSort
       expect(['Arthur Conan Doyle', 'Plato'].map(sorted)).to.deep.equal(['Doyle, Arthur Conan', 'Plato'])
@@ -93,6 +105,7 @@ describe('organizeTemplate', () => {
       expect(getTemplateSettingError('organizeFolderTemplate', '{authorSort}/{titleThe}')).to.equal(null)
       expect(getTemplateSettingError('organizeFileTemplate', '{authorSort} {trackTitle} {trackTotal}')).to.equal(null)
       expect(getTemplateSettingError('organizeFolderTemplate', '{trackTitle}')).to.equal('Unknown token "{trackTitle}"')
+      expect(getTemplateSettingError('organizeFolderTemplate', '{duration}')).to.equal('Unknown token "{duration}"')
       expect(getTemplateSettingError('organizeFolderTemplate', '{authorsort}')).to.equal('Unknown token "{authorsort}"')
     })
 
@@ -283,29 +296,19 @@ describe('organizeTemplate', () => {
       expect(newNames.get('y.epub')).to.equal('My Book.epub')
     })
 
+    it('names each uploaded file with its own format and the folder with the first audio file format', () => {
+      const custom = { organizeFolderTemplate: '{title}< [{format}]>', organizeFileTemplate: '{title}< {track}> {format}' }
+      const { folderSegments, newNames } = getUploadLayout(custom, { title: 'My Book', author: null, series: null }, ['y.epub', 'b.M4B', 'a.mp3'])
+      expect(folderSegments).to.deep.equal(['My Book [mp3]'])
+      expect(Object.fromEntries(newNames)).to.deep.equal({ 'a.mp3': 'My Book 1 mp3.mp3', 'b.M4B': 'My Book 2 m4b.M4B', 'y.epub': 'My Book epub.epub' })
+
+      expect(getUploadLayout(custom, { title: 'Ebook', author: null, series: null }, ['y.epub']).folderSegments).to.deep.equal(['Ebook'])
+    })
+
     it('leaves names alone when the template would give two files the same name', () => {
       const custom = { ...settings, organizeFileTemplate: '{title}' }
       const { newNames } = getUploadLayout(custom, { title: 'My Book', author: null, series: null }, ['a.mp3', 'b.mp3'])
       expect(newNames.size).to.equal(0)
-    })
-  })
-
-  describe('getTemplateExample', () => {
-    it('renders the default templates for a sample book', () => {
-      expect(getTemplateExample(DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE)).to.deep.equal({
-        folder: 'Brandon Sanderson/The Stormlight Archive/1. The Way of Kings',
-        folderError: null,
-        file: 'The Way of Kings - Part 01.mp3',
-        fileError: null
-      })
-    })
-
-    it('reports each invalid template without rendering it', () => {
-      const example = getTemplateExample('{nope}', '{title}/x')
-      expect(example.folder).to.equal('')
-      expect(example.folderError).to.equal('Unknown token "{nope}"')
-      expect(example.file).to.equal('')
-      expect(example.fileError).to.be.a('string')
     })
   })
 })

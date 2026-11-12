@@ -380,7 +380,7 @@ export default {
       // Check that the server's upload folder is free before starting the upload
       for (const item of items) {
         const exists = await this.$axios
-          .$post('/api/upload/target', { library: this.selectedLibraryId, folder: this.selectedFolderId, title: item.title, author: item.author, series: item.series })
+          .$post('/api/upload/target', { library: this.selectedLibraryId, folder: this.selectedFolderId, title: item.title, author: item.author, series: item.series, fileNames: item.files.map((file) => file.name) })
           .then((data) => {
             if (data.libraryItemTitle) {
               this.$toast.error(this.$getString('ToastUploaderItemExistsInSubdirectoryError', [data.libraryItemTitle]))
