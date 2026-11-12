@@ -134,4 +134,31 @@ describe('fileUtils', () => {
       })
     })
   })
+
+  describe('isPathTakenByOther', () => {
+    const fsExtra = require('../../../server/libs/fsExtra')
+    afterEach(() => sinon.restore())
+
+    // Number stats lose inode precision above 2^53, so the stub returns Numbers unless bigint is asked for
+    function stubIdentities(identities) {
+      sinon.stub(fsExtra, 'lstat').callsFake(async (path, options) => {
+        const { dev, ino } = identities[path]
+        return options?.bigint ? { dev, ino } : { dev: Number(dev), ino: Number(ino) }
+      })
+    }
+
+    const cases = [
+      { name: 'the same inode is not taken', a: { dev: 1n, ino: 5n }, b: { dev: 1n, ino: 5n }, expected: false },
+      { name: 'a different inode is taken', a: { dev: 1n, ino: 5n }, b: { dev: 1n, ino: 6n }, expected: true },
+      { name: 'inodes that differ only above 2^53 are taken', a: { dev: 1n, ino: 2n ** 60n }, b: { dev: 1n, ino: 2n ** 60n + 1n }, expected: true },
+      { name: 'an unreported inode is taken', a: { dev: 1n, ino: 0n }, b: { dev: 1n, ino: 0n }, expected: true },
+      { name: 'an unreported device is taken', a: { dev: 0n, ino: 5n }, b: { dev: 0n, ino: 5n }, expected: true }
+    ]
+    cases.forEach(({ name, a, b, expected }) => {
+      it(name, async () => {
+        stubIdentities({ '/from': a, '/to': b })
+        expect(await fileUtils.isPathTakenByOther('/from', '/to')).to.equal(expected)
+      })
+    })
+  })
 })

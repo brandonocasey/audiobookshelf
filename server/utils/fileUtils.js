@@ -42,16 +42,17 @@ module.exports.isSameOrSubPath = isSameOrSubPath
  * Identity of what is at the path. Symlinks are not followed.
  *
  * @param {string} path
- * @returns {Promise<{dev:number, ino:number}|null>} Null when nothing is at the path
+ * @returns {Promise<{dev:bigint, ino:bigint}|null>} Null when nothing is at the path
  */
 async function getPathIdentity(path) {
-  const stat = await fs.lstat(path).catch(() => null)
+  const stat = await fs.lstat(path, { bigint: true }).catch(() => null)
   return stat ? { dev: stat.dev, ino: stat.ino } : null
 }
 module.exports.getPathIdentity = getPathIdentity
 
 /**
- * Whether both paths are one file, such as names differing only in letter case
+ * Whether both paths are one file, such as names differing only in letter case.
+ * A zero dev or ino means the file system does not report one, so the files never count as the same.
  *
  * @param {string} pathA
  * @param {string} pathB
@@ -59,7 +60,8 @@ module.exports.getPathIdentity = getPathIdentity
  */
 async function isSameFile(pathA, pathB) {
   const [identityA, identityB] = await Promise.all([getPathIdentity(pathA), getPathIdentity(pathB)])
-  return !!identityA && !!identityB && identityA.dev === identityB.dev && identityA.ino === identityB.ino
+  if (!identityA?.ino || !identityA.dev || !identityB) return false
+  return identityA.dev === identityB.dev && identityA.ino === identityB.ino
 }
 module.exports.isSameFile = isSameFile
 
