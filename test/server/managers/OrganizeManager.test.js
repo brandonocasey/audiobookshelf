@@ -1263,7 +1263,7 @@ describe('OrganizeManager', () => {
         clock?.restore()
       })
 
-      /** A write always sets the change time to now, so the file times of these paths are reported as long ago instead */
+      /** Writes set the change time to now, so these paths report a long-ago change time. */
       function makeFilesOld(...oldPaths) {
         const lstat = fsExtra.lstat
         sinon.stub(fsExtra, 'lstat').callsFake(async (filePath) => {

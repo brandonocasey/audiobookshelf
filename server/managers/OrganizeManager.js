@@ -307,7 +307,7 @@ class OrganizeManager {
    */
   async deferIfFilesChanging(libraryItemId, targetBefore) {
     if (this.settleRetryItemIds.has(libraryItemId)) return true
-    // Claimed before the check, so a second caller that arrives during it does not start a second retry
+    // Claimed before the check, so a concurrent caller does not start a second retry
     this.settleRetryItemIds.add(libraryItemId)
     if (!(await this.hasFilesChangedRecently(libraryItemId))) {
       this.settleRetryItemIds.delete(libraryItemId)
@@ -323,9 +323,8 @@ class OrganizeManager {
   }
 
   /**
-   * Ignores the metadata file and cover the server writes itself on an edit.
-   * A missing folder is not changing, since the plan skips it as missing.
-   * A failed check lets the item through, since an unreadable file cannot be moved either.
+   * Ignores the metadata file and cover the server writes on an edit.
+   * A missing folder or a failed check lets the item through.
    *
    * @param {string} libraryItemId
    * @returns {Promise<boolean>}
