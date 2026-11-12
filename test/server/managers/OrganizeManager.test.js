@@ -1508,6 +1508,21 @@ describe('OrganizeManager', () => {
         expect(fs.existsSync(rel('Writer', 'New Saga', '1. Book', 'Book.m4b'))).to.be.true
       })
     })
+
+    for (const { kind, rename, model, getIdByName } of [
+      { kind: 'author', rename: renameAuthor, model: () => Database.authorModel, getIdByName: (name) => Database.getAuthorIdByName(library.id, name) },
+      { kind: 'series', rename: renameSeries, model: () => Database.seriesModel, getIdByName: (name) => Database.getSeriesIdByName(library.id, name) }
+    ]) {
+      it(`finds the ${kind} by its new name, and nothing by its old name, in a scan after the rename`, async () => {
+        await addBook('Raw Book', ['Book.m4b'], { title: 'Book', authors: ['Old'], series: 'Old' })
+        const { id } = await model().findOne({ where: { name: 'Old' } })
+
+        await rename('Old', 'New')
+
+        expect(await getIdByName('New')).to.equal(id)
+        expect(await getIdByName('Old')).to.be.null
+      })
+    }
   })
 
   describe('library scans while organizing', () => {

@@ -195,6 +195,8 @@ class AuthorController {
     if (hasUpdated) {
       let numBooksForAuthor = 0
       if (authorNameUpdate) {
+        Database.removeAuthorFromFilterData(req.author.libraryId, req.author.id)
+        Database.addAuthorToFilterData(req.author.libraryId, req.author.name, req.author.id)
         numBooksForAuthor = allItemsWithAuthor.length
         const libraryItems = []
         // Update author name on all books

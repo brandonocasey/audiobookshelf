@@ -89,6 +89,10 @@ class SeriesController {
       await req.series.save()
       SocketAuthority.emitter('series_updated', req.series.toOldJSON())
     }
+    if (isRename) {
+      Database.removeSeriesFromFilterData(req.series.libraryId, req.series.id)
+      Database.addSeriesToFilterData(req.series.libraryId, req.series.name, req.series.id)
+    }
 
     if (isRename) {
       // Keep metadata.json in step, since a later scan reads it
