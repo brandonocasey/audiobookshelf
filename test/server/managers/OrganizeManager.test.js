@@ -48,7 +48,7 @@ describe('OrganizeManager', () => {
     fs.mkdirSync(libraryDir)
     fs.mkdirSync(path.join(tmpDir, 'metadata'))
     global.MetadataPath = path.join(tmpDir, 'metadata')
-    global.ServerSettings = { storeCoverWithItem: false, storeMetadataWithItem: false, metadataFileFormat: 'json', scannerParseSubtitle: false }
+    global.ServerSettings = { sortingPrefixes: ['the', 'a'], storeCoverWithItem: false, storeMetadataWithItem: false, metadataFileFormat: 'json', scannerParseSubtitle: false }
 
     Database.sequelize = new Sequelize({ dialect: 'sqlite', storage: ':memory:', logging: false })
     Database.sequelize.uppercaseFirst = (str) => (str ? `${str[0].toUpperCase()}${str.substr(1)}` : '')
@@ -406,18 +406,33 @@ describe('OrganizeManager', () => {
 
     it('fills book and file tokens from the stored book and its first audio file', async () => {
       await library.update({
-        settings: { ...library.settings, organizeFolderTemplate: '{authorInitial}/{authorSort}/{titleThe}< ({genre})>', organizeFileTemplate: '{originalName} [{codec} {bitrate}k {channels}ch]< {trackTitle}> {track}of{trackTotal}' }
+        settings: { ...library.settings, organizeFolderTemplate: '{authorInitial}/{authorSort}/{titleThe}< ({genre})>', organizeFileTemplate: '{title} [{codec} {bitrate}k {channels}ch]< {trackTitle}> {track}of{trackTotal}' }
       })
       const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'The Book', authors: ['Jane Writer'] })
       const book = (await loadItem(libraryItemId)).media
-      book.set({ titleIgnorePrefix: 'Book, The', genres: ['Fantasy', 'Epic'] })
+      book.set({ genres: ['Fantasy', 'Epic'] })
       book.audioFiles = [...book.audioFiles].sort((x, y) => x.index - y.index).map((audioFile, i) => ({ ...audioFile, codec: i === 0 ? 'aac' : 'mp3', bitRate: i === 0 ? 64000 : 128000, channels: i === 0 ? 2 : 1, metaTags: { ...audioFile.metaTags, tagTitle: i === 0 ? 'Intro' : null } }))
       book.changed('audioFiles', true)
       await book.save()
 
       await manager.organizeItem(libraryItemId)
 
-      expect(listFiles(rel('W', 'Writer, Jane', 'Book, The (Fantasy)'))).to.deep.equal(['a [aac 64k 2ch] Intro 1of2.mp3', 'b [aac 64k 2ch] 2of2.mp3'])
+      expect(listFiles(rel('W', 'Writer, Jane', 'Book, The (Fantasy)'))).to.deep.equal(['The Book [aac 64k 2ch] 2of2.mp3', 'The Book [aac 64k 2ch] Intro 1of2.mp3'])
+    })
+
+    it('cleans a file tag title on its own and leaves the names unchanged on a second run', async () => {
+      await library.update({ settings: { ...library.settings, organizeFileTemplate: '{title}: {trackTitle}' } })
+      const libraryItemId = await addBook('Raw', ['a.mp3'], { title: 'Book', authors: ['Writer'] })
+      const book = (await loadItem(libraryItemId)).media
+      book.audioFiles = book.audioFiles.map((audioFile) => ({ ...audioFile, metaTags: { ...audioFile.metaTags, tagTitle: 'Part 1: Arrival' } }))
+      book.changed('audioFiles', true)
+      await book.save()
+
+      await manager.organizeItem(libraryItemId)
+      const secondRun = await manager.organizeItem(libraryItemId)
+
+      expect(listFiles(rel('Writer', 'Book'))).to.deep.equal(['Book - Part 1 - Arrival.mp3'])
+      expect(secondRun.status).to.equal('unchanged')
     })
 
     it('has the file watcher ignore the old and the new folder while it works', async () => {

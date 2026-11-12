@@ -50,7 +50,6 @@ function getTemplateMetadata(libraryItem) {
   const firstAudioFile = getPlayableAudioFiles(libraryItem)[0]
   return {
     title: media.title,
-    titleIgnorePrefix: media.titleIgnorePrefix,
     subtitle: media.subtitle,
     authors: media.authors.map((author) => author.name),
     series: media.series.map((series) => ({ name: series.name, sequence: series.bookSeries?.sequence })),
@@ -91,14 +90,13 @@ function getFilesToRename(libraryItem) {
         track: formatTrackNumber(i + 1, audioFiles.length),
         trackTotal: audioFiles.length > 1 ? String(audioFiles.length) : '',
         trackTitle: audioFile.metaTags?.tagTitle,
-        disc: disc === null || disc === undefined ? '' : String(disc),
-        originalName: Path.basename(filename, ext)
+        disc: disc === null || disc === undefined ? '' : String(disc)
       }
     }
   })
   if (media.ebookFile) {
     const { path, filename, ext } = media.ebookFile.metadata
-    files.push({ path, filename, ext, fileValues: { originalName: Path.basename(filename, ext) } })
+    files.push({ path, filename, ext, fileValues: {} })
   }
   return files
 }
@@ -111,12 +109,12 @@ function getFilesToRename(libraryItem) {
  * @returns {{segments:string[], files:{path:string, filename:string, newName:string}[]}} Folder segments below the library folder and the new name of each file
  */
 function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplate }) {
-  const values = getTemplateValues(getTemplateMetadata(libraryItem))
-  const segments = renderFolderSegments(organizeFolderTemplate, values)
+  const metadata = getTemplateMetadata(libraryItem)
+  const segments = renderFolderSegments(organizeFolderTemplate, getTemplateValues(metadata))
   const files = getFilesToRename(libraryItem).map((file) => ({
     path: file.path,
     filename: file.filename,
-    newName: renderFileName(organizeFileTemplate, { ...values, ...file.fileValues }, file.ext) || file.filename
+    newName: renderFileName(organizeFileTemplate, getTemplateValues(metadata, file.fileValues), file.ext) || file.filename
   }))
   return { segments, files }
 }
