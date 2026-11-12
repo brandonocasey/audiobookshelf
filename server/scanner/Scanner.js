@@ -23,7 +23,7 @@ const TaskManager = require('../managers/TaskManager')
  * @property {boolean} [overrideCover]
  * @property {boolean} [overrideDetails]
  * @property {number} [minConfidence] - Skip the match unless its confidence (0-1) is at least this
- * @property {Map<string, string>} [autoOrganizeTargets] - Scans pass this. The match records the book's target from before it here instead of organizing it.
+ * @property {Map<string, string>} [autoOrganizeTargets] - When set, the match records the book's prior target here instead of organizing it.
  */
 
 class Scanner {
@@ -194,7 +194,7 @@ class Scanner {
   }
 
   /**
-   * Organize the matched book now, or record it in autoOrganizeTargets for the scan that passed them
+   * Organize the matched book now, or record its prior target in autoOrganizeTargets when given
    *
    * @param {import('../routers/ApiRouter')} apiRouterCtx
    * @param {import('../models/LibraryItem')} libraryItem

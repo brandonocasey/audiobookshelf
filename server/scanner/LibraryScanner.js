@@ -34,6 +34,8 @@ class LibraryScanner {
     this.fileScanCountsByLibraryId = new Map()
     /** @type {[import('../Watcher').PendingFileUpdate[], Task][]} */
     this.pendingFileUpdatesToScan = []
+    /** @type {Map<string, Map<string, string>>} - library id to the books auto match changed while it was scanned, by item id to their target from before the match */
+    this.autoOrganizeTargetsByLibraryId = new Map()
   }
 
   /**
@@ -152,6 +154,7 @@ class LibraryScanner {
       if (count > 0) this.fileScanCountsByLibraryId.set(libraryId, count)
       else this.fileScanCountsByLibraryId.delete(libraryId)
     }
+    this.autoOrganizeMatchedItems(libraryIds)
   }
 
   /**
@@ -252,7 +255,7 @@ class LibraryScanner {
 
     if (this.cancelLibraryScan[libraryScan.libraryId]) delete this.cancelLibraryScan[libraryScan.libraryId]
     this.librariesScanning = this.librariesScanning.filter((lid) => lid !== library.id)
-    this.autoOrganizeMatchedItems(libraryScan.autoOrganizeTargets)
+    this.autoOrganizeMatchedItems([library.id])
 
     TaskManager.taskFinished(task)
 
@@ -435,7 +438,7 @@ class LibraryScanner {
     for (const libraryItemId of addedLibraryItemIds) {
       const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
       if (libraryItem) {
-        await this.autoMatchAddedLibraryItem(libraryScan.library, libraryItem, libraryScan.autoOrganizeTargets)
+        await this.autoMatchAddedLibraryItem(libraryScan.library, libraryItem)
       }
       if (this.cancelLibraryScan[libraryScan.libraryId]) return
     }
@@ -446,14 +449,14 @@ class LibraryScanner {
    *
    * @param {import('../models/Library')} library
    * @param {import('../models/LibraryItem')} libraryItem
-   * @param {Map<string, string>} autoOrganizeTargets Collects the books to organize once the scan ends
    */
-  async autoMatchAddedLibraryItem(library, libraryItem, autoOrganizeTargets) {
+  async autoMatchAddedLibraryItem(library, libraryItem) {
     if (!library.settings.autoMatchNewItems) return
 
+    if (!this.autoOrganizeTargetsByLibraryId.has(library.id)) this.autoOrganizeTargetsByLibraryId.set(library.id, new Map())
     const options = {
       provider: library.settings.autoMatchProvider,
-      autoOrganizeTargets
+      autoOrganizeTargets: this.autoOrganizeTargetsByLibraryId.get(library.id)
     }
     const minConfidencePercent = library.settings.autoMatchMinConfidence
     if (typeof minConfidencePercent === 'number') {
@@ -463,12 +466,18 @@ class LibraryScanner {
   }
 
   /**
-   * Auto organize skips books while their library is scanned, so books an auto match moved are organized after the scan
+   * Auto organize skips books while their library is scanned.
+   * Organize the books that auto match changed once no scan of their library is left.
    *
-   * @param {Map<string, string>} autoOrganizeTargets
+   * @param {Iterable<string>} libraryIds
    */
-  autoOrganizeMatchedItems(autoOrganizeTargets) {
-    if (autoOrganizeTargets.size) this.apiRouter.organizeManager.autoOrganizeItemsInBackground(autoOrganizeTargets)
+  autoOrganizeMatchedItems(libraryIds) {
+    for (const libraryId of libraryIds) {
+      const targets = this.autoOrganizeTargetsByLibraryId.get(libraryId)
+      if (!targets?.size || this.isLibraryFileScanning(libraryId)) continue
+      this.autoOrganizeTargetsByLibraryId.delete(libraryId)
+      this.apiRouter.organizeManager.autoOrganizeItemsInBackground(targets)
+    }
   }
 
   shouldCancelScan(libraryScan) {
@@ -571,7 +580,6 @@ class LibraryScanner {
     this.scanningFilesChanged = true
     // Organize skips these libraries until the whole batch is scanned. A book it moves could be one the batch is about to flag as missing.
     this.addFileScanMark(libraryIds)
-    const autoOrganizeTargets = new Map()
 
     const results = {
       added: 0,
@@ -607,7 +615,7 @@ class LibraryScanner {
           Logger.info(`[LibraryScanner] No important changes to scan for in folder "${folderId}"`)
           continue
         }
-        const folderScanResults = await this.scanFolderUpdates(library, folder, fileUpdateGroup, autoOrganizeTargets)
+        const folderScanResults = await this.scanFolderUpdates(library, folder, fileUpdateGroup)
         Logger.debug(`[LibraryScanner] Folder scan results`, folderScanResults)
 
         // Tally results to share with client
@@ -634,11 +642,10 @@ class LibraryScanner {
       Logger.error(`[LibraryScanner] Failed to scan files changed from watcher`, error)
       throw error
     } finally {
+      // Removing the mark can start an organize run. The queued batch MUST start after it, so that it waits for the run.
       this.removeFileScanMark(libraryIds)
       // A failed batch MUST NOT leave later batches queued forever
       this.scanningFilesChanged = false
-      // The queued batch MUST start after this, so that it waits for the organize run
-      this.autoOrganizeMatchedItems(autoOrganizeTargets)
       this.scanNextPendingFileUpdates()
     }
 
@@ -691,10 +698,9 @@ class LibraryScanner {
    * @param {import('../models/Library')} library
    * @param {import('../models/LibraryFolder')} folder
    * @param {Record<string, string[]>} fileUpdateGroup
-   * @param {Map<string, string>} autoOrganizeTargets Collects the books to organize once the batch ends
    * @returns {Promise<Record<string,number>>}
    */
-  async scanFolderUpdates(library, folder, fileUpdateGroup, autoOrganizeTargets) {
+  async scanFolderUpdates(library, folder, fileUpdateGroup) {
     // Make sure library filter data is set
     //   this is used to check for existing authors & series
     await libraryFilters.getFilterData(library.mediaType, library.id)
@@ -843,7 +849,7 @@ class LibraryScanner {
       }
       if (newLibraryItem) {
         SocketAuthority.libraryItemEmitter('item_added', newLibraryItem)
-        await this.autoMatchAddedLibraryItem(library, newLibraryItem, autoOrganizeTargets)
+        await this.autoMatchAddedLibraryItem(library, newLibraryItem)
       }
       itemGroupingResults[itemDir] = newLibraryItem ? ScanResult.ADDED : ScanResult.NOTHING
     }
