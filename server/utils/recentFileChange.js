@@ -3,7 +3,7 @@ const fs = require('../libs/fsExtra')
 
 /**
  * Find a file below a path that changed after a point in time.
- * Uses the change time, which also moves for files copied with their old modified time kept.
+ * Uses the change time, which also moves when a copy keeps the old modified time.
  * A file that vanishes during the walk counts as changed.
  *
  * @param {string} path File or folder

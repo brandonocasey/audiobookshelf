@@ -94,7 +94,7 @@ describe('OrganizeManager', () => {
 
   function newManager() {
     const organizeManager = new OrganizeManager({ sessions }, audioMetadataManager, abMergeManager)
-    // The files of a test were written a moment ago, so a negative window counts them as settled
+    // Test files were just written, so a negative window counts them as settled
     organizeManager.settleWindowMs = SETTLED_WINDOW_MS
     return organizeManager
   }
@@ -1265,6 +1265,15 @@ describe('OrganizeManager', () => {
         clock?.restore()
       })
 
+      /** Writes set the change time to now, so these paths report a long-ago change time. */
+      function makeFilesOld(...oldPaths) {
+        const lstat = fsExtra.lstat
+        sinon.stub(fsExtra, 'lstat').callsFake(async (filePath) => {
+          const stats = await lstat(filePath)
+          return oldPaths.some((oldPath) => filePath.startsWith(oldPath)) ? Object.assign(Object.create(stats), { ctimeMs: 0 }) : stats
+        })
+      }
+
       async function addEditedBook() {
         await library.update({ settings: { ...library.settings, autoOrganize: true } })
         const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
@@ -1297,15 +1306,28 @@ describe('OrganizeManager', () => {
         expect(movedItem.path).to.equal(rel('Writer', 'Book Two'))
       })
 
-      it('keeps one retry per item', async () => {
+      it('starts one retry for an item that two edits reach at the same time', async () => {
         const { libraryItemId, targetBefore } = await addEditedBook()
         clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'Date'], now: Date.now() })
 
-        await manager.autoOrganizeItem(libraryItemId, targetBefore)
-        await manager.autoOrganizeItem(libraryItemId, targetBefore)
-        await manager.autoOrganizeItemsInBackground(new Map([[libraryItemId, targetBefore]]))
+        await Promise.all([manager.autoOrganizeItem(libraryItemId, targetBefore), manager.autoOrganizeItem(libraryItemId, targetBefore), manager.autoOrganizeItemsInBackground(new Map([[libraryItemId, targetBefore]]))])
+        const background = sinon.spy(manager, 'autoOrganizeItemsInBackground')
+        await clock.tickAsync(SETTLE_WINDOW_MS)
+        await Promise.all(background.returnValues)
 
-        expect(clock.countTimers()).to.equal(1)
+        expect(background.callCount).to.equal(1)
+      })
+
+      it('does not retry a book whose folder is gone', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        fs.rmSync(rel('Raw'), { recursive: true })
+        clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'Date'], now: Date.now() })
+        const background = sinon.spy(manager, 'autoOrganizeItemsInBackground')
+
+        expect(await manager.autoOrganizeItem(libraryItemId, targetBefore)).to.be.null
+        await clock.tickAsync(2 * SETTLE_WINDOW_MS)
+
+        expect(background.called).to.be.false
       })
 
       it('holds back the books of a batch edit that have new files and organizes the others', async () => {
@@ -1313,8 +1335,7 @@ describe('OrganizeManager', () => {
         const settledId = await addBook('Settled', ['b.m4b'], { title: 'Settled', authors: ['Writer'] })
         const settledTargetBefore = await manager.getAutoOrganizeTarget(await loadItem(settledId))
         await setMetadata(settledId, { title: 'Settled Two', authors: ['Writer'] })
-        manager.settleWindowMs = 0
-        sinon.stub(manager, 'hasFilesChangedRecently').callsFake(async (id) => id === libraryItemId)
+        makeFilesOld(rel('Settled'))
         clock = sinon.useFakeTimers({ toFake: ['setTimeout'] })
         const runTask = sinon.spy(manager, 'runTask')
 
@@ -1334,14 +1355,23 @@ describe('OrganizeManager', () => {
         const { libraryItemId, targetBefore } = await addEditedBook()
         const coverPath = rel('Raw', 'cover.jpg')
         await Database.bookModel.update({ coverPath }, { where: { id: (await loadItem(libraryItemId)).mediaId } })
-        manager.settleWindowMs = 300
-        await new Promise((resolve) => setTimeout(resolve, 350))
         fs.writeFileSync(coverPath, 'cover')
         fs.writeFileSync(rel('Raw', 'metadata.json'), '{}')
+        makeFilesOld(rel('Raw', 'a.m4b'))
 
         const movedItem = await manager.autoOrganizeItem(libraryItemId, targetBefore)
 
         expect(movedItem.path).to.equal(rel('Writer', 'Book Two'))
+      })
+
+      it('counts another new file in the folder', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        fs.writeFileSync(rel('Raw', 'cover.jpg'), 'cover')
+        fs.writeFileSync(rel('Raw', 'Part 2.m4b'), 'audio')
+        makeFilesOld(rel('Raw', 'a.m4b'))
+
+        expect(await manager.autoOrganizeItem(libraryItemId, targetBefore)).to.be.null
+        expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
       })
     })
 

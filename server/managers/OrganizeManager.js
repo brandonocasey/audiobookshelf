@@ -19,7 +19,7 @@ const PREVIEW_CHUNK_SIZE = 50
 const LIBRARY_ID_LOOKUP_CHUNK_SIZE = 500
 const MAX_REPORTED_RESULTS = 100
 const ORGANIZE_SETTLE_MS = 60000
-const OWN_METADATA_FILENAMES = ['metadata.json', 'metadata.abs']
+const OWN_METADATA_FILENAME = 'metadata.json'
 
 /**
  * @typedef OrganizeStep
@@ -306,21 +306,25 @@ class OrganizeManager {
    * @returns {Promise<boolean>} True when the item was held back
    */
   async deferIfFilesChanging(libraryItemId, targetBefore) {
-    if (!this.settleRetryItemIds.has(libraryItemId)) {
-      if (!(await this.hasFilesChangedRecently(libraryItemId))) return false
-      Logger.info(`[OrganizeManager] Files of library item "${libraryItemId}" changed in the last ${this.settleWindowMs / 1000}s. Auto organize tries again after that.`)
-      this.settleRetryItemIds.add(libraryItemId)
-      setTimeout(() => {
-        this.settleRetryItemIds.delete(libraryItemId)
-        this.autoOrganizeItemsInBackground(new Map([[libraryItemId, targetBefore]]))
-      }, this.settleWindowMs).unref()
+    if (this.settleRetryItemIds.has(libraryItemId)) return true
+    // Claimed before the check, so a concurrent caller does not start a second retry
+    this.settleRetryItemIds.add(libraryItemId)
+    if (!(await this.hasFilesChangedRecently(libraryItemId))) {
+      this.settleRetryItemIds.delete(libraryItemId)
+      return false
     }
+
+    Logger.info(`[OrganizeManager] Files of library item "${libraryItemId}" changed in the last ${this.settleWindowMs / 1000}s. Auto organize tries again after that.`)
+    setTimeout(() => {
+      this.settleRetryItemIds.delete(libraryItemId)
+      this.autoOrganizeItemsInBackground(new Map([[libraryItemId, targetBefore]]))
+    }, this.settleWindowMs).unref()
     return true
   }
 
   /**
-   * Looks past the metadata file and cover the server writes itself when it edits a book.
-   * A failed check lets the item through, since a file that cannot be read cannot be moved either.
+   * Ignores the metadata file and cover the server writes on an edit.
+   * A missing folder or a failed check lets the item through.
    *
    * @param {string} libraryItemId
    * @returns {Promise<boolean>}
@@ -328,8 +332,8 @@ class OrganizeManager {
   async hasFilesChangedRecently(libraryItemId) {
     try {
       const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
-      if (!libraryItem) return false
-      const ownFilePaths = OWN_METADATA_FILENAMES.map((filename) => Path.join(libraryItem.path, filename))
+      if (!libraryItem || !(await fs.pathExists(libraryItem.path))) return false
+      const ownFilePaths = [Path.join(libraryItem.path, OWN_METADATA_FILENAME)]
       if (libraryItem.media.coverPath) ownFilePaths.push(Path.normalize(libraryItem.media.coverPath))
       return !!(await findFileChangedAfter(libraryItem.path, Date.now() - this.settleWindowMs, new Set(ownFilePaths)))
     } catch (error) {
