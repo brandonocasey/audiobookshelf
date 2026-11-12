@@ -48,6 +48,7 @@ class Scanner {
 
     let updatePayload = {}
     let hasUpdated = false
+    const organizeTargetBefore = await apiRouterCtx.organizeManager.getAutoOrganizeTarget(libraryItem)
 
     if (libraryItem.isBook) {
       const searchISBN = options.isbn || libraryItem.media.isbn
@@ -133,6 +134,8 @@ class Scanner {
       await libraryItem.saveMetadataFile()
 
       SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
+
+      libraryItem = (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id, organizeTargetBefore)) || libraryItem
     }
 
     return {
@@ -513,6 +516,7 @@ class Scanner {
     const libraryScan = new LibraryScan()
     libraryScan.setData(library, 'match')
     LibraryScanner.librariesScanning.push(libraryScan.libraryId)
+    LibraryScanner.librariesMatching.push(libraryScan.libraryId)
     const taskData = {
       libraryId: library.id
     }
@@ -567,6 +571,7 @@ class Scanner {
 
     delete LibraryScanner.cancelLibraryScan[libraryScan.libraryId]
     LibraryScanner.librariesScanning = LibraryScanner.librariesScanning.filter((lid) => lid !== library.id)
+    LibraryScanner.librariesMatching = LibraryScanner.librariesMatching.filter((lid) => lid !== library.id)
     TaskManager.taskFinished(task)
   }
 }

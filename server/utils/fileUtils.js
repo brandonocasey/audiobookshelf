@@ -38,6 +38,92 @@ function isSameOrSubPath(parentPath, childPath) {
 }
 module.exports.isSameOrSubPath = isSameOrSubPath
 
+/**
+ * The path and each parent folder below the library folder, deepest first.
+ * Empty when the path is not inside the library folder.
+ *
+ * @param {string} libraryFolderPath
+ * @param {string} path
+ * @returns {string[]}
+ */
+function getPathsBelowLibraryFolder(libraryFolderPath, path) {
+  const folderPath = filePathToPOSIX(libraryFolderPath)
+  const paths = []
+  let directory = filePathToPOSIX(path)
+  while (directory !== folderPath && isSameOrSubPath(folderPath, directory)) {
+    paths.push(directory)
+    directory = Path.posix.dirname(directory)
+  }
+  return paths
+}
+module.exports.getPathsBelowLibraryFolder = getPathsBelowLibraryFolder
+
+/**
+ * Remove a file or folder tree, including read-only folders such as a copy of one.
+ * Symlinks are not followed.
+ *
+ * @param {string} path
+ * @returns {Promise<void>}
+ */
+async function removeTreeWithReadOnlyFolders(path) {
+  await makeFoldersWritable(path)
+  await fs.remove(path)
+}
+module.exports.removeTreeWithReadOnlyFolders = removeTreeWithReadOnlyFolders
+
+/**
+ * @param {string} path
+ * @returns {Promise<void>}
+ */
+async function makeFoldersWritable(path) {
+  const stat = await fs.lstat(path).catch(() => null)
+  if (!stat?.isDirectory()) return
+  await fs.chmod(path, stat.mode | 0o700)
+  for (const name of await fs.readdir(path)) {
+    await makeFoldersWritable(Path.join(path, name))
+  }
+}
+
+/**
+ * Identity of what is at the path. Symlinks are not followed.
+ *
+ * @param {string} path
+ * @returns {Promise<{dev:bigint, ino:bigint}|null>} Null when nothing is at the path
+ */
+async function getPathIdentity(path) {
+  const stat = await fs.lstat(path, { bigint: true }).catch(() => null)
+  return stat ? { dev: stat.dev, ino: stat.ino } : null
+}
+module.exports.getPathIdentity = getPathIdentity
+
+/**
+ * Whether both paths are one file, such as names that differ only in case.
+ * A zero device or inode number means none is reported, so those files never match.
+ *
+ * @param {string} pathA
+ * @param {string} pathB
+ * @returns {Promise<boolean>}
+ */
+async function isSameFile(pathA, pathB) {
+  const [identityA, identityB] = await Promise.all([getPathIdentity(pathA), getPathIdentity(pathB)])
+  if (!identityA?.ino || !identityA.dev || !identityB) return false
+  return identityA.dev === identityB.dev && identityA.ino === identityB.ino
+}
+module.exports.isSameFile = isSameFile
+
+/**
+ * True when a different file or folder already exists at toPath
+ *
+ * @param {string|null} fromPath Null when nothing at toPath may be treated as the same file
+ * @param {string} toPath
+ * @returns {Promise<boolean>}
+ */
+async function isPathTakenByOther(fromPath, toPath) {
+  if (!(await getPathIdentity(toPath))) return false
+  return !fromPath || !(await isSameFile(fromPath, toPath))
+}
+module.exports.isPathTakenByOther = isPathTakenByOther
+
 function getFileStat(path) {
   try {
     return fs.stat(path)
@@ -357,6 +443,13 @@ module.exports.downloadImageFile = (url, filepath) => {
   return this.downloadFile(url, filepath, contentTypeFilter)
 }
 
+/** Same result as `.replace(/[. ]+$/, '')`, which takes quadratic time on long runs of spaces */
+function trimTrailingDotsAndSpaces(name) {
+  let end = name.length
+  while (end > 0 && (name[end - 1] === '.' || name[end - 1] === ' ')) end--
+  return name.slice(0, end)
+}
+
 module.exports.sanitizeFilename = (filename, colonReplacement = ' - ') => {
   if (typeof filename !== 'string') {
     return false
@@ -376,18 +469,17 @@ module.exports.sanitizeFilename = (filename, colonReplacement = ' - ') => {
   const controlRe = /[\x00-\x1f\x80-\x9f]/g
   const reservedRe = /^\.+$/
   const windowsReservedRe = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i
-  const windowsTrailingRe = /[\. ]+$/
   const lineBreaks = /[\n\r]/g
 
-  let sanitized = filename
-    .replace(':', colonReplacement) // Replace first occurrence of a colon
-    .replace(illegalRe, replacement)
-    .replace(controlRe, replacement)
-    .replace(reservedRe, replacement)
-    .replace(lineBreaks, replacement)
-    .replace(windowsReservedRe, replacement)
-    .replace(windowsTrailingRe, replacement)
-    .replace(/\s+/g, ' ') // Replace consecutive spaces with a single space
+  let sanitized = trimTrailingDotsAndSpaces(
+    filename
+      .replace(':', colonReplacement) // Replace first occurrence of a colon
+      .replace(illegalRe, replacement)
+      .replace(controlRe, replacement)
+      .replace(reservedRe, replacement)
+      .replace(lineBreaks, replacement)
+      .replace(windowsReservedRe, replacement)
+  ).replace(/\s+/g, ' ') // Replace consecutive spaces with a single space
 
   // Check if basename is too many bytes
   const ext = Path.extname(sanitized) // separate out file extension

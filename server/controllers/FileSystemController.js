@@ -128,30 +128,12 @@ class FileSystemController {
       })
     }
 
-    // Check if a library item exists in a subdirectory
-    // See: https://github.com/advplyr/audiobookshelf/issues/4146
-    const cleanedDirectory = directory.split('/').filter(Boolean).join('/')
-    if (cleanedDirectory.includes('/')) {
-      // Can only be 2 levels deep
-      const possiblePaths = []
-      const subdir = Path.dirname(directory)
-      possiblePaths.push(fileUtils.filePathToPOSIX(Path.join(folderPath, subdir)))
-      if (subdir.includes('/')) {
-        possiblePaths.push(fileUtils.filePathToPOSIX(Path.join(folderPath, Path.dirname(subdir))))
-      }
-
-      const libraryItem = await Database.libraryItemModel.findOne({
-        where: {
-          path: possiblePaths
-        }
+    const libraryItem = await Database.libraryItemModel.findByAncestorPath(libraryFolder.path, filepath)
+    if (libraryItem) {
+      return res.json({
+        exists: true,
+        libraryItemTitle: libraryItem.title
       })
-
-      if (libraryItem) {
-        return res.json({
-          exists: true,
-          libraryItemTitle: libraryItem.title
-        })
-      }
     }
 
     return res.json({

@@ -100,6 +100,26 @@
           </ui-tooltip>
         </div>
       </div>
+      <div v-if="showOrganizeSettings" class="p-2 w-full">
+        <p class="text-sm font-semibold">{{ $strings.LabelOrganizeSettings }}</p>
+        <div class="flex items-center py-2">
+          <ui-toggle-switch v-model="autoOrganize" size="sm" @input="formUpdated" />
+          <ui-tooltip :text="$strings.LabelOrganizeAutoOrganizeHelp">
+            <p class="pl-4 text-sm">
+              {{ $strings.LabelOrganizeAutoOrganize }}
+              <span class="material-symbols icon-text text-sm">info</span>
+            </p>
+          </ui-tooltip>
+        </div>
+        <ui-text-input-with-label v-model="organizeFolderTemplate" :label="$strings.LabelOrganizeFolderTemplate" class="mb-1" @input="templatesUpdated" />
+        <p class="text-xs text-gray-300">{{ $strings.LabelOrganizeFolderTemplateHelp }}</p>
+        <p v-if="organizeExample.folderError" class="text-xs text-error pb-2">{{ organizeExample.folderError }}</p>
+        <p v-else class="text-xs pb-2">{{ $strings.LabelOrganizeExample }}: {{ organizeExample.folder }}</p>
+        <ui-text-input-with-label v-model="organizeFileTemplate" :label="$strings.LabelOrganizeFileTemplate" class="mb-1" @input="templatesUpdated" />
+        <p class="text-xs text-gray-300">{{ $strings.LabelOrganizeFileTemplateHelp }}</p>
+        <p v-if="organizeExample.fileError" class="text-xs text-error">{{ organizeExample.fileError }}</p>
+        <p v-else class="text-xs">{{ $strings.LabelOrganizeExample }}: {{ organizeExample.file }}</p>
+      </div>
       <div v-if="isPodcastLibrary" class="p-2 w-full md:w-1/2">
         <ui-dropdown :label="$strings.LabelPodcastSearchRegion" v-model="podcastSearchRegion" :items="$podcastSearchRegionOptions" small class="max-w-72" menu-max-height="200px" @input="formUpdated" />
       </div>
@@ -128,6 +148,7 @@ export default {
       type: Object,
       default: () => null
     },
+    isNew: Boolean,
     processing: Boolean
   },
   data() {
@@ -144,6 +165,11 @@ export default {
       hideSingleBookSeries: false,
       onlyShowLaterBooksInContinueSeries: false,
       podcastSearchRegion: 'us',
+      autoOrganize: false,
+      organizeFolderTemplate: '',
+      organizeFileTemplate: '',
+      organizeExample: { folder: '', folderError: null, file: '', fileError: null },
+      organizeExampleTimeout: null,
       markAsFinishedWhen: 'timeRemaining',
       markAsFinishedValue: 10
     }
@@ -166,6 +192,10 @@ export default {
     },
     autoMatchProviders() {
       return this.$store.state.scanners.bookProviders.filter((provider) => provider.value.startsWith('audible'))
+    },
+    showOrganizeSettings() {
+      // New libraries start with the server's default templates
+      return this.isBookLibrary && !this.isNew
     },
     maskAsFinishedWhenItems() {
       return [
@@ -194,8 +224,11 @@ export default {
       let markAsFinishedTimeRemaining = this.markAsFinishedWhen === 'timeRemaining' ? Number(this.markAsFinishedValue) : null
       let markAsFinishedPercentComplete = this.markAsFinishedWhen === 'percentComplete' ? Number(this.markAsFinishedValue) : null
 
+      const organizeSettings = this.showOrganizeSettings ? { autoOrganize: !!this.autoOrganize, organizeFolderTemplate: this.organizeFolderTemplate, organizeFileTemplate: this.organizeFileTemplate } : {}
+
       return {
         settings: {
+          ...organizeSettings,
           coverAspectRatio: this.useSquareBookCovers ? this.$constants.BookCoverAspectRatio.SQUARE : this.$constants.BookCoverAspectRatio.STANDARD,
           disableWatcher: !this.enableWatcher,
           skipMatchingMediaWithAsin: !!this.skipMatchingMediaWithAsin,
@@ -216,6 +249,21 @@ export default {
     formUpdated() {
       this.$emit('update', this.getLibraryData())
     },
+    templatesUpdated() {
+      this.formUpdated()
+      clearTimeout(this.organizeExampleTimeout)
+      this.organizeExampleTimeout = setTimeout(this.loadOrganizeExample, 300)
+    },
+    loadOrganizeExample() {
+      return this.$axios
+        .$post('/api/tools/organize/example', { organizeFolderTemplate: this.organizeFolderTemplate, organizeFileTemplate: this.organizeFileTemplate })
+        .then((example) => {
+          this.organizeExample = example
+        })
+        .catch((error) => {
+          console.error('Failed to load organize template example', error)
+        })
+    },
     init() {
       this.useSquareBookCovers = this.librarySettings.coverAspectRatio === this.$constants.BookCoverAspectRatio.SQUARE
       this.enableWatcher = !this.librarySettings.disableWatcher
@@ -229,6 +277,10 @@ export default {
       this.hideSingleBookSeries = !!this.librarySettings.hideSingleBookSeries
       this.onlyShowLaterBooksInContinueSeries = !!this.librarySettings.onlyShowLaterBooksInContinueSeries
       this.podcastSearchRegion = this.librarySettings.podcastSearchRegion || 'us'
+      this.autoOrganize = !!this.librarySettings.autoOrganize
+      this.organizeFolderTemplate = this.librarySettings.organizeFolderTemplate || ''
+      this.organizeFileTemplate = this.librarySettings.organizeFileTemplate || ''
+      if (this.showOrganizeSettings) this.loadOrganizeExample()
       this.markAsFinishedWhen = this.librarySettings.markAsFinishedTimeRemaining ? 'timeRemaining' : 'percentComplete'
       if (!this.librarySettings.markAsFinishedTimeRemaining && !this.librarySettings.markAsFinishedPercentComplete) {
         this.markAsFinishedWhen = 'timeRemaining'
@@ -239,6 +291,9 @@ export default {
   mounted() {
     this.init()
     this.$store.dispatch('scanners/fetchProviders')
+  },
+  beforeDestroy() {
+    clearTimeout(this.organizeExampleTimeout)
   }
 }
 </script>

@@ -21,7 +21,8 @@ describe('LibraryItemController', () => {
 
     apiRouter = new ApiRouter({
       auth: new Auth(),
-      apiCacheManager: new ApiCacheManager()
+      apiCacheManager: new ApiCacheManager(),
+      organizeManager: { getAutoOrganizeTarget: sinon.stub().resolves(null), autoOrganizeItem: sinon.stub().resolves(false) }
     })
 
     sinon.stub(Logger, 'info')

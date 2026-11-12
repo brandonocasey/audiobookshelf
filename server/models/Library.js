@@ -1,5 +1,6 @@
 const { DataTypes, Model } = require('sequelize')
 const Logger = require('../Logger')
+const { DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE } = require('../utils/organizeTemplate')
 
 /**
  * @typedef LibrarySettingsObject
@@ -15,6 +16,9 @@ const Logger = require('../Logger')
  * @property {boolean} hideSingleBookSeries Do not show series that only have 1 book
  * @property {boolean} onlyShowLaterBooksInContinueSeries Skip showing books that are earlier than the max sequence read
  * @property {string[]} metadataPrecedence
+ * @property {string} [organizeFolderTemplate] Book libraries only. Folder path template used when organizing files
+ * @property {string} [organizeFileTemplate] Book libraries only. Audio and ebook file name template used when organizing files
+ * @property {boolean} [autoOrganize] Book libraries only. Organize a book after its metadata changes
  * @property {number} markAsFinishedTimeRemaining Time remaining in seconds to mark as finished. (defaults to 10s)
  * @property {number} markAsFinishedPercentComplete Percent complete to mark as finished (0-100). If this is set it will be used over markAsFinishedTimeRemaining.
  */
@@ -81,6 +85,9 @@ class Library extends Model {
         hideSingleBookSeries: false,
         onlyShowLaterBooksInContinueSeries: false,
         metadataPrecedence: this.defaultMetadataPrecedence,
+        organizeFolderTemplate: DEFAULT_FOLDER_TEMPLATE,
+        organizeFileTemplate: DEFAULT_FILE_TEMPLATE,
+        autoOrganize: false,
         markAsFinishedPercentComplete: null,
         markAsFinishedTimeRemaining: 10
       }
@@ -199,7 +206,7 @@ class Library extends Model {
    * @returns {LibrarySettingsObject}
    */
   get librarySettings() {
-    return this.settings || Library.getDefaultLibrarySettingsForMediaType(this.mediaType)
+    return { ...Library.getDefaultLibrarySettingsForMediaType(this.mediaType), ...this.settings }
   }
 
   /**
@@ -214,9 +221,7 @@ class Library extends Model {
       icon: this.icon,
       mediaType: this.mediaType,
       provider: this.provider,
-      settings: {
-        ...this.settings
-      },
+      settings: this.librarySettings,
       lastScan: this.lastScan?.valueOf() || null,
       lastScanVersion: this.lastScanVersion,
       createdAt: this.createdAt.valueOf(),

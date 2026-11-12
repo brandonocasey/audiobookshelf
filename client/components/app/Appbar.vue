@@ -175,6 +175,13 @@ export default {
         })
       }
 
+      if (!this.isPodcastLibrary) {
+        options.push({
+          text: this.$strings.ButtonOrganizeFiles,
+          action: 'organize'
+        })
+      }
+
       options.push({
         text: this.$strings.ButtonReScan,
         action: 'rescan'
@@ -223,6 +230,8 @@ export default {
         this.requestBatchQuickEmbed()
       } else if (action === 'quick-match') {
         this.batchAutoMatchClick()
+      } else if (action === 'organize') {
+        this.$store.commit('globals/setOrganizePreviewRequest', { libraryItemIds: this.selectedMediaItems.map((i) => i.id), clearSelection: true })
       } else if (action === 'rescan') {
         this.batchRescan()
       } else if (action === 'download') {

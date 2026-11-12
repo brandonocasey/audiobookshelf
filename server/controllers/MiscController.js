@@ -12,6 +12,7 @@ const cron = require('../libs/nodeCron')
 const { isObject, getTitleIgnorePrefix } = require('../utils/index')
 const ServerSettings = require('../objects/settings/ServerSettings')
 const { sanitizeFilename } = require('../utils/fileUtils')
+const { getUploadTarget } = require('../utils/uploadTarget')
 const { sanitize } = require('../utils/htmlSanitizer')
 
 const TaskManager = require('../managers/TaskManager')
@@ -23,6 +24,60 @@ const adminStats = require('../utils/queries/adminStats')
  *
  * @typedef {Request & RequestUserObject} RequestWithUser
  */
+
+/**
+ * Validate the upload form fields and work out where the upload is saved.
+ * Sends the error response and returns null when the request is invalid.
+ *
+ * @param {RequestWithUser} req
+ * @param {Response} res
+ * @param {string[]} uploadedNames
+ * @returns {Promise<import('../utils/uploadTarget').UploadTarget|null>}
+ */
+async function resolveUploadTarget(req, res, uploadedNames) {
+  const { title, author, series, folder: folderId, library: libraryId } = req.body
+  // Validate request body
+  if (!libraryId || !folderId || typeof libraryId !== 'string' || typeof folderId !== 'string' || !title || typeof title !== 'string') {
+    res.status(400).send('Invalid request body')
+    return null
+  }
+
+  const library = await Database.libraryModel.findByIdWithFolders(libraryId)
+  if (!library) {
+    res.status(404).send('Library not found')
+    return null
+  }
+
+  if (!req.user.checkCanAccessLibrary(library.id)) {
+    Logger.error(`[MiscController] User "${req.user.username}" attempting to upload to library "${library.id}" without access`)
+    res.sendStatus(403)
+    return null
+  }
+
+  const folder = library.libraryFolders.find((fold) => fold.id === folderId)
+  if (!folder) {
+    res.status(404).send('Folder not found')
+    return null
+  }
+
+  const details = { title, author: author && typeof author === 'string' ? author : null, series: series && typeof series === 'string' ? series : null }
+  const target = await getUploadTarget(library, folder, details, uploadedNames)
+  if (!target.directory) {
+    res.status(400).send('Invalid request body')
+    return null
+  }
+  return target
+}
+
+/**
+ * @param {Response} res
+ * @param {import('../utils/uploadTarget').UploadTarget} target
+ */
+function sendUploadConflict(res, target) {
+  const message = target.libraryItemTitle ? `Cannot upload to "${target.directory}": it is inside the folder of the library item "${target.libraryItemTitle}"` : `Cannot upload to "${target.directory}": the folder already exists`
+  Logger.error(`[MiscController] ${message}`)
+  return res.status(409).send(message)
+}
 
 class MiscController {
   constructor() {}
@@ -45,44 +100,24 @@ class MiscController {
     }
 
     const files = Object.values(req.files).flat()
-    let { title, author, series, folder: folderId, library: libraryId } = req.body
-    // Validate request body
-    if (!libraryId || !folderId || typeof libraryId !== 'string' || typeof folderId !== 'string' || !title || typeof title !== 'string') {
-      return res.status(400).send('Invalid request body')
-    }
-    if (!series || typeof series !== 'string') {
-      series = null
-    }
-    if (!author || typeof author !== 'string') {
-      author = null
+    const target = await resolveUploadTarget(
+      req,
+      res,
+      files.map((file) => file.name)
+    )
+    if (!target) return
+
+    if (target.exists) {
+      return sendUploadConflict(res, target)
     }
 
-    const library = await Database.libraryModel.findByIdWithFolders(libraryId)
-    if (!library) {
-      return res.status(404).send('Library not found')
-    }
-
-    if (!req.user.checkCanAccessLibrary(library.id)) {
-      Logger.error(`[MiscController] User "${req.user.username}" attempting to upload to library "${library.id}" without access`)
-      return res.sendStatus(403)
-    }
-
-    const folder = library.libraryFolders.find((fold) => fold.id === folderId)
-    if (!folder) {
-      return res.status(404).send('Folder not found')
-    }
-
-    // Podcasts should only be one folder deep
-    const outputDirectoryParts = library.isPodcast ? [title] : [author, series, title]
-    // `.filter(Boolean)` to strip out all the potentially missing details (eg: `author`)
-    // before sanitizing all the directory parts to remove illegal chars and finally prepending
-    // the base folder path
-    const cleanedOutputDirectoryParts = outputDirectoryParts.filter(Boolean).map((part) => sanitizeFilename(part))
-    const outputDirectory = Path.join(...[folder.path, ...cleanedOutputDirectoryParts])
-
+    const outputDirectory = target.path
     try {
-      await fs.ensureDir(outputDirectory)
+      // mkdir without recursion fails when the folder appeared after the check
+      await fs.ensureDir(Path.dirname(outputDirectory))
+      await fs.mkdir(outputDirectory)
     } catch (error) {
+      if (error.code === 'EEXIST') return sendUploadConflict(res, { ...target, exists: true })
       Logger.error('[MiscController] Failed to create upload directory', outputDirectory, error)
       return res.sendStatus(500)
     }
@@ -90,7 +125,7 @@ class MiscController {
     Logger.info(`Uploading ${files.length} files to`, outputDirectory)
 
     for (const file of files) {
-      const path = Path.join(outputDirectory, sanitizeFilename(file.name))
+      const path = Path.join(outputDirectory, target.newNames.get(file.name) || sanitizeFilename(file.name))
 
       await file
         .mv(path)
@@ -104,6 +139,25 @@ class MiscController {
     }
 
     res.sendStatus(200)
+  }
+
+  /**
+   * POST: /api/upload/target
+   * Where an upload with these details would be saved and whether that folder is taken
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async getUploadTarget(req, res) {
+    if (!req.user.canUpload) {
+      Logger.warn(`User "${req.user.username}" attempted to check an upload folder without permission`)
+      return res.sendStatus(403)
+    }
+
+    const target = await resolveUploadTarget(req, res, [])
+    if (!target) return
+
+    res.json({ directory: target.directory, exists: target.exists, libraryItemTitle: target.libraryItemTitle })
   }
 
   /**

@@ -67,6 +67,17 @@ class Series extends Model {
   }
 
   /**
+   * Every book in the series, whoever can access it
+   *
+   * @param {string} seriesId
+   * @returns {Promise<import('./LibraryItem')[]>} Expanded library items
+   */
+  static async getAllLibraryItemsForSeries(seriesId) {
+    const bookSeries = await this.sequelize.models.bookSeries.findAll({ where: { seriesId }, attributes: ['bookId'] })
+    return this.sequelize.models.libraryItem.findAllExpandedWhere({ mediaId: bookSeries.map((entry) => entry.bookId) })
+  }
+
+  /**
    *
    * @param {string} seriesName
    * @param {string} libraryId

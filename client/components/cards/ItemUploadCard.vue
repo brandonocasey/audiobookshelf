@@ -12,6 +12,9 @@
       <widgets-alert v-if="error" type="error">
         <p class="text-base">{{ error }}</p>
       </widgets-alert>
+      <widgets-alert v-if="directoryError" type="warning">
+        <p class="text-base">{{ directoryError }}</p>
+      </widgets-alert>
 
       <div class="flex my-2 -mx-2">
         <div class="w-1/2 px-2">
@@ -85,8 +88,6 @@
 </template>
 
 <script>
-import Path from 'path'
-
 export default {
   props: {
     item: {
@@ -94,6 +95,8 @@ export default {
       default: () => {}
     },
     mediaType: String,
+    libraryId: String,
+    folderId: String,
     processing: Boolean,
     provider: String
   },
@@ -105,6 +108,10 @@ export default {
         series: ''
       },
       error: '',
+      // Folder the server saves the upload in. Books use the library's organize template; podcasts use the title.
+      directory: '',
+      directoryError: '',
+      directoryTimeout: null,
       isUploading: false,
       uploadFailed: false,
       uploadSuccess: false,
@@ -119,14 +126,8 @@ export default {
     isPodcast() {
       return this.mediaType === 'podcast'
     },
-    directory() {
-      if (!this.itemData.title) return ''
-      if (this.isPodcast) return this.itemData.title
-
-      const outputPathParts = [this.itemData.author, this.itemData.series, this.itemData.title]
-      const cleanedOutputPathParts = outputPathParts.filter(Boolean).map((part) => this.$sanitizeFilename(part))
-
-      return Path.join(...cleanedOutputPathParts)
+    directoryRequest() {
+      return { library: this.libraryId, folder: this.folderId, title: this.itemData.title, author: this.itemData.author, series: this.itemData.series }
     },
     isNonInteractable() {
       return this.isUploading || this.isFetchingMetadata
@@ -148,7 +149,35 @@ export default {
       return `${this.uploadProgressPercent}% (${loaded} / ${total})`
     }
   },
+  watch: {
+    directoryRequest() {
+      clearTimeout(this.directoryTimeout)
+      this.directoryTimeout = setTimeout(this.updateDirectory, 300)
+    }
+  },
   methods: {
+    async updateDirectory() {
+      const request = this.directoryRequest
+      if (!request.title || !request.library || !request.folder) {
+        this.directory = ''
+        this.directoryError = ''
+        return
+      }
+
+      try {
+        const target = await this.$axios.$post('/api/upload/target', request)
+        // A newer edit made this answer stale
+        if (request !== this.directoryRequest) return
+        this.directory = target.directory
+        this.directoryError = target.exists ? this.getDirectoryExistsMessage(target) : ''
+      } catch (error) {
+        console.error('Failed to get the upload folder', error)
+      }
+    },
+    getDirectoryExistsMessage(target) {
+      if (target.libraryItemTitle) return this.$getString('ToastUploaderItemExistsInSubdirectoryError', [target.libraryItemTitle])
+      return this.$getString('ToastUploaderFilepathExistsError', [target.directory])
+    },
     setUploadStatus(status) {
       this.isUploading = status === 'uploading'
       this.uploadFailed = status === 'failed'
@@ -214,7 +243,6 @@ export default {
       var files = this.item.itemFiles.concat(this.item.otherFiles)
       return {
         index: this.item.index,
-        directory: this.directory,
         ...this.itemData,
         files
       }
@@ -226,6 +254,9 @@ export default {
       this.itemData.author = this.item.author
       this.itemData.series = this.item.series
     }
+  },
+  beforeDestroy() {
+    clearTimeout(this.directoryTimeout)
   }
 }
 </script>

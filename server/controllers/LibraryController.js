@@ -9,6 +9,7 @@ const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilter
 const libraryItemFilters = require('../utils/queries/libraryItemFilters')
 const seriesFilters = require('../utils/queries/seriesFilters')
 const fileUtils = require('../utils/fileUtils')
+const { TEMPLATE_SETTING_KEYS, getTemplateSettingError } = require('../utils/organizeTemplate')
 const { createNewSortInstance } = require('../libs/fastSort')
 const naturalSort = createNewSortInstance({
   comparer: new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
@@ -37,6 +38,20 @@ const zipHelpers = require('../utils/zipHelpers')
  *
  * @typedef {RequestWithUser & RequestEntityObject} LibraryControllerRequest
  */
+
+/**
+ * Error text for an invalid setting value, or null when it can be saved
+ *
+ * @param {string} key
+ * @param {unknown} value
+ * @param {unknown} currentValue Value the setting has now, which sets the type
+ * @returns {string|null}
+ */
+function getSettingValueError(key, value, currentValue) {
+  if (typeof value !== typeof currentValue) return `must be of type ${typeof currentValue}`
+  const templateError = TEMPLATE_SETTING_KEYS.includes(key) ? getTemplateSettingError(key, value) : null
+  return templateError ? `is invalid: ${templateError}` : null
+}
 
 class LibraryController {
   constructor() {}
@@ -118,8 +133,9 @@ class LibraryController {
             }
             newLibraryPayload.settings[key] = req.body.settings[key] === null ? null : Number(req.body.settings[key])
           } else {
-            if (typeof req.body.settings[key] !== typeof newLibraryPayload.settings[key]) {
-              return res.status(400).send(`Invalid request. Setting "${key}" must be of type ${typeof newLibraryPayload.settings[key]}`)
+            const settingError = getSettingValueError(key, req.body.settings[key], newLibraryPayload.settings[key])
+            if (settingError) {
+              return res.status(400).type('text/plain').send(`Invalid request. Setting "${key}" ${settingError}`)
             }
             newLibraryPayload.settings[key] = req.body.settings[key]
           }
@@ -303,6 +319,7 @@ class LibraryController {
         updatedSettings[key] = defaultLibrarySettings[key]
       }
     }
+    const previousSettings = { ...updatedSettings }
 
     let hasUpdates = false
     let hasUpdatedDisableWatcher = false
@@ -373,9 +390,10 @@ class LibraryController {
             Logger.debug(`[LibraryController] Library "${req.library.name}" updating setting "${key}" to "${updatedSettings[key]}"`)
           }
         } else {
-          if (typeof req.body.settings[key] !== typeof updatedSettings[key]) {
-            Logger.error(`[LibraryController] Invalid request. Setting "${key}" must be of type ${typeof updatedSettings[key]}`)
-            return res.status(400).send(`Invalid request. Setting "${key}" must be of type ${typeof updatedSettings[key]}`)
+          const settingError = getSettingValueError(key, req.body.settings[key], updatedSettings[key])
+          if (settingError) {
+            Logger.error(`[LibraryController] Invalid request. Setting "${key}" ${settingError}`)
+            return res.status(400).type('text/plain').send(`Invalid request. Setting "${key}" ${settingError}`)
           }
           if (req.body.settings[key] !== updatedSettings[key]) {
             if (key === 'disableWatcher') hasUpdatedDisableWatcher = true
@@ -505,6 +523,8 @@ class LibraryController {
         await req.library.save()
       }
     }
+
+    this.organizeManager.organizeLibraryIfTemplatesChanged(req.library.id, previousSettings, updatedSettings)
 
     if (hasUpdatedScanCron) {
       Logger.debug(`[LibraryController] Updated library "${req.library.name}" auto scan cron`)

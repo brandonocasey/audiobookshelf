@@ -9,6 +9,7 @@
 
       <p class="truncate text-xs text-gray-300">{{ description }}</p>
       <p v-if="specialMessage" class="truncate text-xs text-gray-300">{{ specialMessage }}</p>
+      <p v-if="organizeFailures.length" class="text-xs truncate text-red-500" :title="organizeFailures.join('\n')">{{ organizeFailures[0] }}</p>
 
       <p v-if="isFailed && failedMessage" class="text-xs truncate text-red-500">{{ failedMessage }}</p>
       <p v-else-if="!isFinished && cancelingScan" class="text-xs truncate">Canceling...</p>
@@ -97,6 +98,10 @@ export default {
       }
 
       return ''
+    },
+    organizeFailures() {
+      if (this.action !== 'organize-files') return []
+      return (this.task.data?.results || []).filter((result) => result.status === 'failed').map((result) => `${result.title || result.itemId}: ${result.error}`)
     },
     isLibraryScan() {
       return this.action === 'library-scan' || this.action === 'library-match-all'

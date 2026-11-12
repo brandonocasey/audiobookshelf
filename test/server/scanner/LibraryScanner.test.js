@@ -44,9 +44,11 @@ describe('LibraryScanner auto match new items', () => {
 
     library = await Database.libraryModel.create({ name: 'Test Library', mediaType: 'book', provider: 'google', settings: Database.libraryModel.getDefaultLibrarySettingsForMediaType('book') })
     await Database.libraryFolderModel.create({ path: libraryPath, libraryId: library.id })
+    LibraryScanner.apiRouter = { organizeManager: { getAutoOrganizeTarget: sinon.stub().resolves(null), autoOrganizeItem: sinon.stub().resolves(null) } }
   })
 
   afterEach(async () => {
+    LibraryScanner.apiRouter = null
     sinon.restore()
     await Database.sequelize.close()
     fs.rmSync(tempDir, { recursive: true, force: true })

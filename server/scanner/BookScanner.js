@@ -208,7 +208,8 @@ class BookScanner {
 
     const ebookFileScanData = await parseEbookMetadata.parse(media.ebookFile)
 
-    const bookMetadata = await this.getBookMetadataFromScanData(media.audioFiles, ebookFileScanData, libraryItemData, libraryScan, librarySettings, existingLibraryItem.id)
+    // With only the title set, the loop below finds no metadata to change
+    const bookMetadata = libraryItemData.keepMetadata ? { title: media.title } : await this.getBookMetadataFromScanData(media.audioFiles, ebookFileScanData, libraryItemData, libraryScan, librarySettings, existingLibraryItem.id)
     let authorsUpdated = false
     const bookAuthorsRemoved = []
     let seriesUpdated = false

@@ -202,6 +202,7 @@ describe('LibraryController.update auto match settings', () => {
       res.statusCode = code
       return res
     }
+    res.type = () => res
     res.send = (body) => {
       res.body = body
       return res
@@ -211,7 +212,7 @@ describe('LibraryController.update auto match settings', () => {
       return res
     }
     const req = { user: { isAdminOrUp: true }, library, body: { settings: { [key]: value } } }
-    await LibraryController.update.call({}, req, res)
+    await LibraryController.update.call({ organizeManager: { organizeLibraryIfTemplatesChanged: sinon.stub() } }, req, res)
     return res
   }
 
@@ -260,6 +261,7 @@ describe('LibraryController.create auto match settings', () => {
       res.statusCode = code
       return res
     }
+    res.type = () => res
     res.send = (body) => {
       res.body = body
       return res
