@@ -31,9 +31,9 @@ const MAX_TEMPLATE_LENGTH = 500
  * @property {string} [asin]
  * @property {string} [isbn]
  * @property {string} [publisher]
- * @property {string} [codec] Codec of the first audio file that plays
- * @property {number} [bitRate] Bits per second of the first audio file that plays
- * @property {number} [channels] Channel count of the first audio file that plays
+ * @property {string} [codec] Codec of the file being named, else of the first audio file that plays
+ * @property {number} [bitRate] Bits per second of the file being named, else of the first audio file that plays
+ * @property {number} [channels] Channel count of the file being named, else of the first audio file that plays
  * @property {string} [channelLayout] Channel layout of the file being named, else of the first audio file that plays
  * @property {string} [format] Extension without the dot. From the file being named, else the first audio file that plays
  * @property {string} [originalYear] Original year tag of the first audio file that plays

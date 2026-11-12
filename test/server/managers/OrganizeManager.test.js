@@ -412,11 +412,11 @@ describe('OrganizeManager', () => {
       expect(listFiles(rel('Writer', 'Book'))).to.deep.equal(['Book - 3.mp3', 'Book - Disc 0 - 2.mp3', 'Book - Disc 2 - 1.mp3'])
     })
 
-    it('fills book and file tokens from the stored book and its first audio file', async () => {
+    it('fills book tokens from the stored book and audio tokens from each file', async () => {
       await library.update({
-        settings: { ...library.settings, organizeFolderTemplate: '{authorInitial}/{authorSort}/{titleThe}< ({genre})>', organizeFileTemplate: '{title} [{codec} {bitrate}k {channels}ch]< {trackTitle}> {track}of{trackTotal}' }
+        settings: { ...library.settings, organizeFolderTemplate: '{authorInitial}/{authorSort}/{titleThe}< ({genre})>', organizeFileTemplate: '{title}< [{codec} {bitrate}k {channels}ch]>< {trackTitle}>< {track}of{trackTotal}>' }
       })
-      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'The Book', authors: ['Jane Writer'] })
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3', 'c.epub'], { title: 'The Book', authors: ['Jane Writer'] })
       const book = (await loadItem(libraryItemId)).media
       book.set({ genres: ['Fantasy', 'Epic'] })
       book.audioFiles = [...book.audioFiles].sort((x, y) => x.index - y.index).map((audioFile, i) => ({ ...audioFile, codec: i === 0 ? 'aac' : 'mp3', bitRate: i === 0 ? 64000 : 128000, channels: i === 0 ? 2 : 1, metaTags: { ...audioFile.metaTags, tagTitle: i === 0 ? 'Intro' : null } }))
@@ -425,7 +425,7 @@ describe('OrganizeManager', () => {
 
       await manager.organizeItem(libraryItemId)
 
-      expect(listFiles(rel('W', 'Writer, Jane', 'Book, The (Fantasy)'))).to.deep.equal(['The Book [aac 64k 2ch] 2of2.mp3', 'The Book [aac 64k 2ch] Intro 1of2.mp3'])
+      expect(listFiles(rel('W', 'Writer, Jane', 'Book, The (Fantasy)'))).to.deep.equal(['The Book [aac 64k 2ch] Intro 1of2.mp3', 'The Book [mp3 128k 1ch] 2of2.mp3', 'The Book.epub'])
     })
 
     it('fills the title, tag and audio detail tokens, and each file its own duration, format and channel layout', async () => {

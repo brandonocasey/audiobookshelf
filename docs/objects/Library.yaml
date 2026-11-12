@@ -82,7 +82,7 @@ components:
           type: string
           example: '{author}/{series}/<{sequence}. >{title}'
         organizeFileTemplate:
-          description: 'Book libraries only. Template for the name of audio and ebook files without the extension. Accepts the folder template tokens plus {track}, {trackTotal}, {trackTitle}, {disc} and {duration}. Here {format}, {channelLayout} and {duration} describe each file.'
+          description: 'Book libraries only. Template for the name of audio and ebook files without the extension. Accepts the folder template tokens plus {track}, {trackTotal}, {trackTitle}, {disc} and {duration}. Here {duration} and the audio tokens describe each file.'
           type: string
           example: '{title}< - Part {track}>'
         autoOrganize:

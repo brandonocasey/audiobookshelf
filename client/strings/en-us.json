@@ -516,7 +516,7 @@
   "LabelOrganizeFileOnly": "Only in file names",
   "LabelOrganizeFileOnlyBadge": "file",
   "LabelOrganizeFileTemplate": "File name template",
-  "LabelOrganizeFileTemplateHelp": "Names audio and ebook files without the extension. Text inside < > is left out when a detail inside it is empty. Here {format}, {channelLayout} and {duration} describe each file. With auto organize on, changing a template renames every book in the library.",
+  "LabelOrganizeFileTemplateHelp": "Names audio and ebook files without the extension. Text inside < > is left out when a detail inside it is empty. Here {duration} and the audio details describe each file. With auto organize on, changing a template renames every book in the library.",
   "LabelOrganizeFilesDescription": "Move this book's folder and rename its audio and ebook files to match the library's organize templates.",
   "LabelOrganizeFolderTemplate": "Folder template",
   "LabelOrganizeFolderTemplateHelp": "Path of the book folder below the library folder. Text inside < > is left out when a detail inside it is empty. Audio details come from the first audio file. With auto organize on, changing a template renames every book in the library.",
