@@ -13,10 +13,13 @@ const { filePathToPOSIX, getPathsBelowLibraryFolder, getPathIdentity, isSameFile
 const { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
 const { captureMediaChoices, restoreMediaChoices } = require('../utils/organizeMediaChoices')
 const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
+const { findFileChangedAfter } = require('../utils/recentFileChange')
 
 const PREVIEW_CHUNK_SIZE = 50
 const LIBRARY_ID_LOOKUP_CHUNK_SIZE = 500
 const MAX_REPORTED_RESULTS = 100
+const ORGANIZE_SETTLE_MS = 60000
+const OWN_METADATA_FILENAMES = ['metadata.json', 'metadata.abs']
 
 /**
  * @typedef OrganizeStep
@@ -67,6 +70,9 @@ class OrganizeManager {
     /** @type {Map<string, Promise<LibraryItemPaths>>} Item paths per library, kept while a preview or run is active */
     this.itemPathsByLibraryId = new Map()
     this.activeRunCount = 0
+    this.settleWindowMs = ORGANIZE_SETTLE_MS
+    /** @type {Set<string>} Items with an auto organize retry waiting for their files to settle */
+    this.settleRetryItemIds = new Set()
   }
 
   get journalDirectory() {
@@ -293,6 +299,46 @@ class OrganizeManager {
   }
 
   /**
+   * Files still being copied into a book folder would be moved half done. Hold the item back and try again once the window has passed.
+   *
+   * @param {string} libraryItemId
+   * @param {string|null} targetBefore From getAutoOrganizeTarget before the edit
+   * @returns {Promise<boolean>} True when the item was held back
+   */
+  async deferIfFilesChanging(libraryItemId, targetBefore) {
+    if (!this.settleRetryItemIds.has(libraryItemId)) {
+      if (!(await this.hasFilesChangedRecently(libraryItemId))) return false
+      Logger.info(`[OrganizeManager] Files of library item "${libraryItemId}" changed in the last ${this.settleWindowMs / 1000}s. Auto organize tries again after that.`)
+      this.settleRetryItemIds.add(libraryItemId)
+      setTimeout(() => {
+        this.settleRetryItemIds.delete(libraryItemId)
+        this.autoOrganizeItemsInBackground(new Map([[libraryItemId, targetBefore]]))
+      }, this.settleWindowMs).unref()
+    }
+    return true
+  }
+
+  /**
+   * Looks past the metadata file and cover the server writes itself when it edits a book.
+   * A failed check lets the item through, since a file that cannot be read cannot be moved either.
+   *
+   * @param {string} libraryItemId
+   * @returns {Promise<boolean>}
+   */
+  async hasFilesChangedRecently(libraryItemId) {
+    try {
+      const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
+      if (!libraryItem) return false
+      const ownFilePaths = OWN_METADATA_FILENAMES.map((filename) => Path.join(libraryItem.path, filename))
+      if (libraryItem.media.coverPath) ownFilePaths.push(Path.normalize(libraryItem.media.coverPath))
+      return !!(await findFileChangedAfter(libraryItem.path, Date.now() - this.settleWindowMs, new Set(ownFilePaths)))
+    } catch (error) {
+      Logger.warn(`[OrganizeManager] Failed to check whether files of library item "${libraryItemId}" are still changing`, error)
+      return false
+    }
+  }
+
+  /**
    * Organize the item when its library has auto organize on. Only when the edit changed its target.
    *
    * @param {string} libraryItemId
@@ -301,6 +347,7 @@ class OrganizeManager {
    */
   async autoOrganizeItem(libraryItemId, targetBefore) {
     if (!(await this.hasTargetChanged(libraryItemId, targetBefore))) return null
+    if (await this.deferIfFilesChanging(libraryItemId, targetBefore)) return null
 
     const result = await this.organizeItem(libraryItemId)
     if (result.status === 'skipped' || result.status === 'failed') {
@@ -323,7 +370,8 @@ class OrganizeManager {
         await libraryIds
         const libraryItemIds = []
         for (const [libraryItemId, targetBefore] of targetsBefore) {
-          if (await this.hasTargetChanged(libraryItemId, targetBefore)) libraryItemIds.push(libraryItemId)
+          if (!(await this.hasTargetChanged(libraryItemId, targetBefore))) continue
+          if (!(await this.deferIfFilesChanging(libraryItemId, targetBefore))) libraryItemIds.push(libraryItemId)
         }
         if (libraryItemIds.length) this.startTask(libraryItemIds)
       } catch (error) {

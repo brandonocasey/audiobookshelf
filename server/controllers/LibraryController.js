@@ -1210,6 +1210,7 @@ class LibraryController {
     const itemsUpdated = []
 
     const itemsWithNarrator = await libraryItemFilters.getAllLibraryItemsWithNarrators([narratorName], req.library.id)
+    const organizeTargetsBefore = await this.organizeManager.getAutoOrganizeTargets(itemsWithNarrator)
 
     for (const libraryItem of itemsWithNarrator) {
       libraryItem.media.narrators = libraryItem.media.narrators.filter((n) => n !== narratorName)
@@ -1230,6 +1231,9 @@ class LibraryController {
     res.json({
       updated: itemsUpdated.length
     })
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**
@@ -1254,6 +1258,7 @@ class LibraryController {
     const itemsUpdated = []
 
     const itemsWithNarrator = await libraryItemFilters.getAllLibraryItemsWithNarrators([narratorName], req.library.id)
+    const organizeTargetsBefore = await this.organizeManager.getAutoOrganizeTargets(itemsWithNarrator)
 
     for (const libraryItem of itemsWithNarrator) {
       libraryItem.media.narrators = libraryItem.media.narrators.filter((n) => n !== narratorName)
@@ -1271,6 +1276,9 @@ class LibraryController {
     res.json({
       updated: itemsUpdated.length
     })
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**

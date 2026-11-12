@@ -550,6 +550,7 @@ class MiscController {
     Database.replaceGenreInFilterData(genre, newGenre)
 
     const libraryItemsWithGenre = await libraryItemFilters.getAllLibraryItemsWithGenres([genre, newGenre])
+    const organizeTargetsBefore = await this.organizeManager.getAutoOrganizeTargets(libraryItemsWithGenre)
     for (const libraryItem of libraryItemsWithGenre) {
       if (libraryItem.media.genres.includes(newGenre)) {
         genreMerged = true // new genre is an existing genre so this is a merge
@@ -575,6 +576,9 @@ class MiscController {
       genreMerged,
       numItemsUpdated
     })
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**
@@ -598,6 +602,7 @@ class MiscController {
 
     // Get all items with genre
     const libraryItemsWithGenre = await libraryItemFilters.getAllLibraryItemsWithGenres([genre])
+    const organizeTargetsBefore = await this.organizeManager.getAutoOrganizeTargets(libraryItemsWithGenre)
 
     let numItemsUpdated = 0
     // Remove genre from items
@@ -616,6 +621,9 @@ class MiscController {
     res.json({
       numItemsUpdated
     })
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**
