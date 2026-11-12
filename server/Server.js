@@ -140,6 +140,7 @@ class Server {
 
     // Routers
     this.apiRouter = new ApiRouter(this)
+    LibraryScanner.apiRouter = this.apiRouter
     this.hlsRouter = new HlsRouter(this.auth, this.playbackSessionManager)
     this.publicRouter = new PublicRouter(this.playbackSessionManager)
 

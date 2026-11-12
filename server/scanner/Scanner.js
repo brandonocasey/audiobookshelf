@@ -22,6 +22,7 @@ const TaskManager = require('../managers/TaskManager')
  * @property {string} [asin] - This override is currently unused in Abs clients
  * @property {boolean} [overrideCover]
  * @property {boolean} [overrideDetails]
+ * @property {number} [minConfidence] - Skip the match unless its confidence (0-1) is at least this
  */
 
 class Scanner {
@@ -59,6 +60,11 @@ class Scanner {
         }
       }
       const matchData = results[0]
+      if (isBelowMinConfidence(matchData.matchConfidence, options.minConfidence)) {
+        return {
+          warning: `${provider} match confidence ${formatMatchConfidence(matchData.matchConfidence)} is below minimum ${formatMinConfidence(options.minConfidence)}`
+        }
+      }
 
       // Update cover if not set OR overrideCover flag
       if (matchData.cover && (!libraryItem.media.coverPath || options.overrideCover)) {
@@ -424,6 +430,40 @@ class Scanner {
   }
 
   /**
+   * Quick match library item unless the library skip settings apply. options.provider overrides the library provider.
+   *
+   * @param {import('../routers/ApiRouter')} apiRouterCtx
+   * @param {import('../models/Library')} library
+   * @param {import('../models/LibraryItem')} libraryItem
+   * @param {QuickMatchOptions} [options]
+   * @returns {Promise<boolean>} true if library item was updated
+   */
+  async matchLibraryItem(apiRouterCtx, library, libraryItem, options = {}) {
+    if (libraryItem.media.asin && library.settings.skipMatchingMediaWithAsin) {
+      Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ASIN`)
+      return false
+    }
+
+    if (libraryItem.media.isbn && library.settings.skipMatchingMediaWithIsbn) {
+      Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ISBN`)
+      return false
+    }
+
+    let result
+    try {
+      result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider, ...options })
+    } catch (error) {
+      Logger.error(`[Scanner] matchLibraryItems: Failed to match library item "${libraryItem.media.title}"`, error)
+      return false
+    }
+    if (result.warning) {
+      Logger.warn(`[Scanner] matchLibraryItems: Match warning ${result.warning} for library item "${libraryItem.media.title}"`)
+      return false
+    }
+    return result.updated
+  }
+
+  /**
    * Quick match library items
    *
    * @param {import('../routers/ApiRouter')} apiRouterCtx
@@ -436,21 +476,8 @@ class Scanner {
     for (let i = 0; i < libraryItems.length; i++) {
       const libraryItem = libraryItems[i]
 
-      if (libraryItem.media.asin && library.settings.skipMatchingMediaWithAsin) {
-        Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ASIN (${i + 1} of ${libraryItems.length})`)
-        continue
-      }
-
-      if (libraryItem.media.isbn && library.settings.skipMatchingMediaWithIsbn) {
-        Logger.debug(`[Scanner] matchLibraryItems: Skipping "${libraryItem.media.title}" because it already has an ISBN (${i + 1} of ${libraryItems.length})`)
-        continue
-      }
-
       Logger.debug(`[Scanner] matchLibraryItems: Quick matching "${libraryItem.media.title}" (${i + 1} of ${libraryItems.length})`)
-      const result = await this.quickMatchLibraryItem(apiRouterCtx, libraryItem, { provider: library.provider })
-      if (result.warning) {
-        Logger.warn(`[Scanner] matchLibraryItems: Match warning ${result.warning} for library item "${libraryItem.media.title}"`)
-      } else if (result.updated) {
+      if (await this.matchLibraryItem(apiRouterCtx, library, libraryItem)) {
         libraryScan.resultsUpdated++
       }
 
@@ -544,3 +571,56 @@ class Scanner {
   }
 }
 module.exports = new Scanner()
+
+/**
+ * Confidence scores are weighted sums, so a perfect match can come out as 0.9999999999999999
+ */
+const MATCH_CONFIDENCE_TOLERANCE = 1e-14
+
+const PERCENT_PER_FRACTION = 100
+
+const MATCH_CONFIDENCE_PERCENT_DECIMALS = 2
+
+/**
+ * Keeps every digit a double holds while dropping float error from scaling a fraction to a percent
+ */
+const PERCENT_SIGNIFICANT_DIGITS = 15
+
+/**
+ * @param {number} [matchConfidence] - 0-1, unset when the provider gives no confidence
+ * @param {number} [minConfidence] - 0-1, unset for no minimum
+ * @returns {boolean}
+ */
+function isBelowMinConfidence(matchConfidence, minConfidence) {
+  if (typeof minConfidence !== 'number') return false
+  if (typeof matchConfidence !== 'number') return true
+  return matchConfidence + MATCH_CONFIDENCE_TOLERANCE < minConfidence
+}
+
+/**
+ * Rounds down so a skipped confidence never shows as equal to the minimum
+ *
+ * @param {number} [matchConfidence] - 0-1
+ * @returns {string}
+ */
+function formatMatchConfidence(matchConfidence) {
+  if (typeof matchConfidence !== 'number') return 'unknown'
+  const decimalScale = 10 ** MATCH_CONFIDENCE_PERCENT_DECIMALS
+  return `${Math.floor(removeFloatError(matchConfidence * PERCENT_PER_FRACTION * decimalScale)) / decimalScale}%`
+}
+
+/**
+ * @param {number} minConfidence - 0-1
+ * @returns {string}
+ */
+function formatMinConfidence(minConfidence) {
+  return `${removeFloatError(minConfidence * PERCENT_PER_FRACTION)}%`
+}
+
+/**
+ * @param {number} value
+ * @returns {number} value without float error, so 0.29 * 100 gives 29, not 28.999999999999996
+ */
+function removeFloatError(value) {
+  return Number(value.toPrecision(PERCENT_SIGNIFICANT_DIGITS))
+}
