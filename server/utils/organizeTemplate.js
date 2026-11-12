@@ -3,13 +3,13 @@ const { sanitizeFilename } = require('./fileUtils')
 const { checkFilepathIsAudioFile } = require('./scandir')
 const globals = require('./globals')
 const { nameToLastFirst } = require('./parsers/parseNameString')
-const { getTitlePrefixAtEnd } = require('./index')
+const { getTitlePrefixAtEnd, getTitleIgnorePrefix, elapsedPretty } = require('./index')
 
 const DEFAULT_FOLDER_TEMPLATE = '{author}/{series}/<{sequence}. >{title}'
 const DEFAULT_FILE_TEMPLATE = '{title}< - Part {track}>'
 
-const FOLDER_TOKENS = ['author', 'authors', 'authorSort', 'authorInitial', 'series', 'sequence', 'sequencePadded', 'title', 'titleThe', 'subtitle', 'year', 'publishedDate', 'narrator', 'narrators', 'genre', 'genres', 'language', 'abridged', 'explicit', 'asin', 'isbn', 'publisher', 'codec', 'bitrate', 'channels']
-const FILE_TOKENS = [...FOLDER_TOKENS, 'track', 'trackTotal', 'trackTitle', 'disc']
+const FOLDER_TOKENS = ['author', 'authors', 'authorSort', 'authorInitial', 'series', 'sequence', 'sequencePadded', 'title', 'titleThe', 'titleIgnorePrefix', 'subtitle', 'year', 'originalYear', 'publishedDate', 'narrator', 'narrators', 'genre', 'genres', 'language', 'abridged', 'explicit', 'asin', 'isbn', 'publisher', 'codec', 'bitrate', 'channels', 'channelLayout', 'format']
+const FILE_TOKENS = [...FOLDER_TOKENS, 'track', 'trackTotal', 'trackTitle', 'disc', 'duration']
 const SEQUENCE_PAD_LENGTH = 2
 const MAX_TEMPLATE_LENGTH = 500
 
@@ -34,12 +34,16 @@ const MAX_TEMPLATE_LENGTH = 500
  * @property {string} [codec] Codec of the first audio file that plays
  * @property {number} [bitRate] Bits per second of the first audio file that plays
  * @property {number} [channels] Channel count of the first audio file that plays
+ * @property {string} [channelLayout] Channel layout of the first audio file that plays
+ * @property {string} [format] File extension without the dot of the first audio file that plays
+ * @property {string} [originalYear] Original year tag of the first audio file that plays
  *
  * @typedef TemplateFileValues
  * @property {string} [track]
  * @property {string} [trackTotal]
  * @property {string} [trackTitle]
  * @property {string} [disc]
+ * @property {number} [duration] Seconds
  */
 
 /**
@@ -214,7 +218,9 @@ function getAudioValues(metadata) {
   return {
     codec: cleanValue(metadata.codec),
     bitrate: metadata.bitRate ? String(Math.round(metadata.bitRate / 1000)) : '',
-    channels: cleanValue(metadata.channels)
+    channels: cleanValue(metadata.channels),
+    channelLayout: cleanValue(metadata.channelLayout),
+    format: cleanValue(metadata.format).toLowerCase()
   }
 }
 
@@ -237,8 +243,10 @@ function getTemplateValues(metadata, fileValues = {}) {
     sequencePadded: padSequence(sequence),
     title: cleanValue(metadata.title),
     titleThe: cleanValue(getTitlePrefixAtEnd(metadata.title?.trim())),
+    titleIgnorePrefix: cleanValue(getTitleIgnorePrefix(metadata.title?.trim())),
     subtitle: cleanValue(metadata.subtitle),
     year: cleanValue(metadata.publishedYear),
+    originalYear: cleanValue(metadata.originalYear),
     publishedDate: cleanValue(metadata.publishedDate),
     narrator: cleanValue(metadata.narrators?.[0]),
     narrators: cleanValues(metadata.narrators).join(', '),
@@ -253,7 +261,8 @@ function getTemplateValues(metadata, fileValues = {}) {
     track: fileValues.track || '',
     trackTotal: fileValues.trackTotal || '',
     trackTitle: cleanValue(fileValues.trackTitle),
-    disc: fileValues.disc || ''
+    disc: fileValues.disc || '',
+    duration: fileValues.duration ? elapsedPretty(fileValues.duration) : ''
   }
 }
 
@@ -367,9 +376,12 @@ const SAMPLE_BOOK = {
   publisher: 'Tor Books',
   codec: 'aac',
   bitRate: 64000,
-  channels: 2
+  channels: 2,
+  channelLayout: 'stereo',
+  format: 'mp3',
+  originalYear: '2010'
 }
-const SAMPLE_FILE = { track: '01', trackTotal: '12', trackTitle: 'Prelude to the Stormlight Archive', disc: '1' }
+const SAMPLE_FILE = { track: '01', trackTotal: '12', trackTitle: 'Prelude to the Stormlight Archive', disc: '1', duration: 1234 }
 
 /**
  * Render the templates for a sample book

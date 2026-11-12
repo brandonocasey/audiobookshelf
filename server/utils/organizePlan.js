@@ -65,7 +65,10 @@ function getTemplateMetadata(libraryItem) {
     publisher: media.publisher,
     codec: firstAudioFile?.codec,
     bitRate: firstAudioFile?.bitRate,
-    channels: firstAudioFile?.channels
+    channels: firstAudioFile?.channels,
+    channelLayout: firstAudioFile?.channelLayout,
+    format: firstAudioFile?.metadata.ext.slice(1),
+    originalYear: firstAudioFile?.metaTags?.tagOriginalYear
   }
 }
 
@@ -90,7 +93,8 @@ function getFilesToRename(libraryItem) {
         track: formatTrackNumber(i + 1, audioFiles.length),
         trackTotal: audioFiles.length > 1 ? String(audioFiles.length) : '',
         trackTitle: audioFile.metaTags?.tagTitle,
-        disc: disc === null || disc === undefined ? '' : String(disc)
+        disc: disc === null || disc === undefined ? '' : String(disc),
+        duration: audioFile.duration
       }
     }
   })

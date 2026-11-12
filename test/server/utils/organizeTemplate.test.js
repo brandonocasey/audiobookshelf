@@ -31,9 +31,12 @@ describe('organizeTemplate', () => {
       explicit: true,
       codec: 'aac',
       bitRate: 64000,
-      channels: 2
+      channels: 2,
+      channelLayout: '5.1(side)',
+      format: 'M4B',
+      originalYear: '1996'
     }
-    const fileValues = { track: '02', trackTotal: '12', trackTitle: 'Chapter: Two', disc: '1' }
+    const fileValues = { track: '02', trackTotal: '12', trackTitle: 'Chapter: Two', disc: '1', duration: 5000 }
 
     it('renders each book token', () => {
       const values = getTemplateValues(fullBook)
@@ -41,6 +44,8 @@ describe('organizeTemplate', () => {
         authorSort: 'Sanderson, Brandon',
         authorInitial: 'S',
         titleThe: 'Way of Kings, The',
+        titleIgnorePrefix: 'Way of Kings',
+        originalYear: '1996',
         sequencePadded: '01',
         narrators: 'Michael Kramer, Kate Reading',
         genre: 'Fantasy',
@@ -51,7 +56,9 @@ describe('organizeTemplate', () => {
         explicit: 'Explicit',
         codec: 'aac',
         bitrate: '64',
-        channels: '2'
+        channels: '2',
+        channelLayout: '5.1(side)',
+        format: 'm4b'
       }
       for (const [token, expected] of Object.entries(rendered)) {
         expect(renderFolderSegments(`{${token}}`, values), token).to.deep.equal([expected])
@@ -60,12 +67,12 @@ describe('organizeTemplate', () => {
 
     it('renders each file token and cleans names from the file', () => {
       const values = getTemplateValues(fullBook, fileValues)
-      expect(renderFileName('{trackTitle}, {track} of {trackTotal}, {disc}', values, '.mp3')).to.equal('Chapter - Two, 02 of 12, 1.mp3')
+      expect(renderFileName('{trackTitle}, {track} of {trackTotal}, {disc}, {duration}', values, '.mp3')).to.equal('Chapter - Two, 02 of 12, 1, 1 hr 23 min.mp3')
     })
 
     it('renders them empty when the details are missing so their groups drop out', () => {
       const values = getTemplateValues({ title: 'Solo', authors: [] })
-      const template = '{title}< {authorSort}>< {genre}>< ({abridged})>< {codec}>< {bitrate}k>< {trackTitle}>'
+      const template = '{title}< {authorSort}>< {genre}>< ({abridged})>< {codec}>< {bitrate}k>< {trackTitle}>< {originalYear}>< {format}>< {channelLayout}>< {duration}>'
       expect(renderFileName(template, values, '.mp3')).to.equal('Solo.mp3')
     })
 
@@ -84,6 +91,11 @@ describe('organizeTemplate', () => {
       expect(['The Way of Kings', '  The Spaces  ', 'A Game of Thrones', "Ender's Game", 'The', ''].map(titleThe)).to.deep.equal(['Way of Kings, The', 'Spaces, The', 'Game of Thrones, A', "Ender's Game", 'The', ''])
     })
 
+    it('removes the sorting prefix of a title, also around spaces', () => {
+      const titleIgnorePrefix = (title) => getTemplateValues({ title }).titleIgnorePrefix
+      expect(['The Way of Kings', '  The Spaces  ', "Ender's Game", 'The', ''].map(titleIgnorePrefix)).to.deep.equal(['Way of Kings', 'Spaces', "Ender's Game", 'The', ''])
+    })
+
     it('sorts the first author as last name first, and keeps a single name', () => {
       const sorted = (name) => getTemplateValues({ title: 'T', authors: [name] }).authorSort
       expect(['Arthur Conan Doyle', 'Plato'].map(sorted)).to.deep.equal(['Doyle, Arthur Conan', 'Plato'])
@@ -93,6 +105,7 @@ describe('organizeTemplate', () => {
       expect(getTemplateSettingError('organizeFolderTemplate', '{authorSort}/{titleThe}')).to.equal(null)
       expect(getTemplateSettingError('organizeFileTemplate', '{authorSort} {trackTitle} {trackTotal}')).to.equal(null)
       expect(getTemplateSettingError('organizeFolderTemplate', '{trackTitle}')).to.equal('Unknown token "{trackTitle}"')
+      expect(getTemplateSettingError('organizeFolderTemplate', '{duration}')).to.equal('Unknown token "{duration}"')
       expect(getTemplateSettingError('organizeFolderTemplate', '{authorsort}')).to.equal('Unknown token "{authorsort}"')
     })
 
