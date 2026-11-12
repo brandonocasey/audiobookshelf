@@ -28,6 +28,8 @@ class LibraryScan {
     this.authorsNumBooksChangedIds = new Set()
     /** @type {string[]} */
     this.seriesRemovedFromBooks = []
+    /** @type {Map<string, string>} library item id to its auto organize target from before its match in this scan */
+    this.autoOrganizeTargets = new Map()
 
     /** @type {string} item label while a library item is being scanned, so a thrown error can name it */
     this.failureItem = null

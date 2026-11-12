@@ -83,6 +83,7 @@ describe('OrganizeManager', () => {
     LibraryScanner.scanningFilesChanged = false
     LibraryScanner.pendingFileUpdatesToScan = []
     LibraryScanner.fileScanCountsByLibraryId.clear()
+    LibraryScanner.apiRouter = null
     fs.rmSync(tmpDir, { recursive: true, force: true })
     await Database.sequelize.sync({ force: true })
   })
@@ -1316,6 +1317,33 @@ describe('OrganizeManager', () => {
 
       expect(result.libraryItem.media.metadata.title).to.equal('Second Title')
       expect(listFiles(rel('Writer'))).to.deep.equal(['Matched Title', 'Matched Title/Matched Title.m4b'])
+    })
+
+    describe('after an auto match of a new book', () => {
+      const scans = {
+        'library scan': async () => LibraryScanner.scan(await Database.libraryModel.findByIdWithFolders(library.id)),
+        'watcher batch': async () => {
+          const pendingTask = new Task()
+          pendingTask.setData('watcher-scan', { text: 'Scanning', key: 'MessageTaskScanningFileChanges' }, null, false, {})
+          await LibraryScanner.scanFilesChanged([{ libraryId: library.id, folderId: libraryFolder.id, path: rel('Writer', 'Book', 'Book.m4b'), relPath: 'Writer/Book/Book.m4b', type: 'added' }], pendingTask)
+        }
+      }
+      Object.entries(scans).forEach(([scanName, runScan]) => {
+        it(`organizes the book once the ${scanName} ends`, async () => {
+          await library.update({ settings: { ...library.settings, autoOrganize: true, autoMatchNewItems: true } })
+          Database.serverSettings = { scannerFindCovers: false, scannerPreferMatchedMetadata: true }
+          sinon.stub(BookFinder, 'search').resolves([{ title: 'Matched Title', author: 'Writer' }])
+          LibraryScanner.apiRouter = { organizeManager: manager }
+          fs.mkdirSync(rel('Writer', 'Book'), { recursive: true })
+          fs.writeFileSync(rel('Writer', 'Book', 'Book.m4b'), 'Book.m4b')
+
+          await runScan()
+          await LibraryScanner.waitForOrganizeRuns([library.id], 'the test')
+
+          expect(listFiles(rel('Writer'))).to.deep.equal(['Matched Title', 'Matched Title/Matched Title.m4b'])
+          expect((await Database.libraryItemModel.findOne({ where: { libraryId: library.id } })).path).to.equal(rel('Writer', 'Matched Title'))
+        })
+      })
     })
 
     it('does not run when the edit changed nothing', async () => {

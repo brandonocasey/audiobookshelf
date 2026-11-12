@@ -252,6 +252,7 @@ class LibraryScanner {
 
     if (this.cancelLibraryScan[libraryScan.libraryId]) delete this.cancelLibraryScan[libraryScan.libraryId]
     this.librariesScanning = this.librariesScanning.filter((lid) => lid !== library.id)
+    this.autoOrganizeMatchedItems(libraryScan.autoOrganizeTargets)
 
     TaskManager.taskFinished(task)
 
@@ -434,7 +435,7 @@ class LibraryScanner {
     for (const libraryItemId of addedLibraryItemIds) {
       const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
       if (libraryItem) {
-        await this.autoMatchAddedLibraryItem(libraryScan.library, libraryItem)
+        await this.autoMatchAddedLibraryItem(libraryScan.library, libraryItem, libraryScan.autoOrganizeTargets)
       }
       if (this.cancelLibraryScan[libraryScan.libraryId]) return
     }
@@ -445,18 +446,29 @@ class LibraryScanner {
    *
    * @param {import('../models/Library')} library
    * @param {import('../models/LibraryItem')} libraryItem
+   * @param {Map<string, string>} autoOrganizeTargets Collects the books to organize once the scan ends
    */
-  async autoMatchAddedLibraryItem(library, libraryItem) {
+  async autoMatchAddedLibraryItem(library, libraryItem, autoOrganizeTargets) {
     if (!library.settings.autoMatchNewItems) return
 
     const options = {
-      provider: library.settings.autoMatchProvider
+      provider: library.settings.autoMatchProvider,
+      autoOrganizeTargets
     }
     const minConfidencePercent = library.settings.autoMatchMinConfidence
     if (typeof minConfidencePercent === 'number') {
       options.minConfidence = minConfidencePercent / 100
     }
     await getScanner().matchLibraryItem(this.apiRouter, library, libraryItem, options)
+  }
+
+  /**
+   * Auto organize skips books while their library is scanned, so books an auto match moved are organized after the scan
+   *
+   * @param {Map<string, string>} autoOrganizeTargets
+   */
+  autoOrganizeMatchedItems(autoOrganizeTargets) {
+    if (autoOrganizeTargets.size) this.apiRouter.organizeManager.autoOrganizeItemsInBackground(autoOrganizeTargets)
   }
 
   shouldCancelScan(libraryScan) {
@@ -559,6 +571,7 @@ class LibraryScanner {
     this.scanningFilesChanged = true
     // Organize skips these libraries until the whole batch is scanned. A book it moves could be one the batch is about to flag as missing.
     this.addFileScanMark(libraryIds)
+    const autoOrganizeTargets = new Map()
 
     const results = {
       added: 0,
@@ -594,7 +607,7 @@ class LibraryScanner {
           Logger.info(`[LibraryScanner] No important changes to scan for in folder "${folderId}"`)
           continue
         }
-        const folderScanResults = await this.scanFolderUpdates(library, folder, fileUpdateGroup)
+        const folderScanResults = await this.scanFolderUpdates(library, folder, fileUpdateGroup, autoOrganizeTargets)
         Logger.debug(`[LibraryScanner] Folder scan results`, folderScanResults)
 
         // Tally results to share with client
@@ -624,6 +637,8 @@ class LibraryScanner {
       this.removeFileScanMark(libraryIds)
       // A failed batch MUST NOT leave later batches queued forever
       this.scanningFilesChanged = false
+      // The queued batch MUST start after this, so that it waits for the organize run
+      this.autoOrganizeMatchedItems(autoOrganizeTargets)
       this.scanNextPendingFileUpdates()
     }
 
@@ -676,9 +691,10 @@ class LibraryScanner {
    * @param {import('../models/Library')} library
    * @param {import('../models/LibraryFolder')} folder
    * @param {Record<string, string[]>} fileUpdateGroup
+   * @param {Map<string, string>} autoOrganizeTargets Collects the books to organize once the batch ends
    * @returns {Promise<Record<string,number>>}
    */
-  async scanFolderUpdates(library, folder, fileUpdateGroup) {
+  async scanFolderUpdates(library, folder, fileUpdateGroup, autoOrganizeTargets) {
     // Make sure library filter data is set
     //   this is used to check for existing authors & series
     await libraryFilters.getFilterData(library.mediaType, library.id)
@@ -827,7 +843,7 @@ class LibraryScanner {
       }
       if (newLibraryItem) {
         SocketAuthority.libraryItemEmitter('item_added', newLibraryItem)
-        await this.autoMatchAddedLibraryItem(library, newLibraryItem)
+        await this.autoMatchAddedLibraryItem(library, newLibraryItem, autoOrganizeTargets)
       }
       itemGroupingResults[itemDir] = newLibraryItem ? ScanResult.ADDED : ScanResult.NOTHING
     }
