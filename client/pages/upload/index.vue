@@ -74,7 +74,7 @@
       </widgets-alert>
 
       <!-- Item Upload cards -->
-      <cards-item-upload-card v-for="item in items" :key="item.index" :ref="`itemCard-${item.index}`" :media-type="selectedLibraryMediaType" :item="item" :provider="fetchMetadata.provider" :processing="processing" @remove="removeItem(item)" />
+      <cards-item-upload-card v-for="item in items" :key="item.index" :ref="`itemCard-${item.index}`" :media-type="selectedLibraryMediaType" :library-id="selectedLibraryId" :folder-id="selectedFolderId" :item="item" :provider="fetchMetadata.provider" :processing="processing" @remove="removeItem(item)" />
 
       <!-- Upload/Reset btns -->
       <div v-show="items.length" class="flex justify-end pb-8 pt-4">
@@ -377,18 +377,15 @@ export default {
 
       const itemsToUpload = []
 
-      // Check if path already exists before starting upload
-      //  uploading fails if path already exists
+      // Check that the server's upload folder is free before starting the upload
       for (const item of items) {
         const exists = await this.$axios
-          .$post(`/api/filesystem/pathexists`, { directory: item.directory, folderPath: this.selectedFolder.fullPath })
+          .$post('/api/upload/target', { library: this.selectedLibraryId, folder: this.selectedFolderId, title: item.title, author: item.author, series: item.series })
           .then((data) => {
-            if (data.exists) {
-              if (data.libraryItemTitle) {
-                this.$toast.error(this.$getString('ToastUploaderItemExistsInSubdirectoryError', [data.libraryItemTitle]))
-              } else {
-                this.$toast.error(this.$getString('ToastUploaderFilepathExistsError', [Path.join(this.selectedFolder.fullPath, item.directory)]))
-              }
+            if (data.libraryItemTitle) {
+              this.$toast.error(this.$getString('ToastUploaderItemExistsInSubdirectoryError', [data.libraryItemTitle]))
+            } else if (data.exists) {
+              this.$toast.error(this.$getString('ToastUploaderFilepathExistsError', [Path.join(this.selectedFolder.fullPath, data.directory)]))
             }
             return data.exists
           })

@@ -48,7 +48,6 @@
       </widgets-alert>
     </div>
 
-    <!-- Organize files -->
     <div class="w-full border border-black-200 p-4 my-8">
       <div class="flex items-center">
         <div>
