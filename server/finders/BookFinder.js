@@ -431,7 +431,7 @@ class BookFinder {
       }
     }
 
-    // The last fuzzy search drops the author, which must not count as a neutral author match
+    // A fuzzy search can drop the author. Do not count that as a neutral author match.
     this.setMatchConfidences(books, libraryItem, { title: actualTitleQuery, author: actualAuthorQuery || author, isTitleAsin })
 
     const libraryItemDurationMinutes = getDurationMinutes(libraryItem)
