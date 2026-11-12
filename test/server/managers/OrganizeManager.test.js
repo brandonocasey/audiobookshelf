@@ -1728,7 +1728,7 @@ describe('OrganizeManager', () => {
 
       function rescanBatch(libraryItemIds) {
         const responded = deferred()
-        const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true }, body: { libraryItemIds } }, { sendStatus: responded.resolve })
+        const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true, checkCanAccessLibraryItem: () => true }, body: { libraryItemIds } }, { sendStatus: responded.resolve })
         return { rescan, responded: responded.promise }
       }
 
