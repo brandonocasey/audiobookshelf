@@ -32,6 +32,9 @@ const FileSystemController = require('../../../server/controllers/FileSystemCont
 const Scanner = require('../../../server/scanner/Scanner')
 const BookFinder = require('../../../server/finders/BookFinder')
 
+const SETTLED_WINDOW_MS = -1000
+const SETTLE_WINDOW_MS = 60000
+
 describe('OrganizeManager', () => {
   let tmpDir
   let libraryDir
@@ -88,7 +91,10 @@ describe('OrganizeManager', () => {
   })
 
   function newManager() {
-    return new OrganizeManager({ sessions }, audioMetadataManager, abMergeManager)
+    const organizeManager = new OrganizeManager({ sessions }, audioMetadataManager, abMergeManager)
+    // The files of a test were written a moment ago, so a negative window counts them as settled
+    organizeManager.settleWindowMs = SETTLED_WINDOW_MS
+    return organizeManager
   }
 
   /**
@@ -1246,6 +1252,97 @@ describe('OrganizeManager', () => {
       expect(await manager.autoOrganizeItem(libraryItemId, targetBefore)).to.be.null
     })
 
+    describe('files still arriving', () => {
+      let clock
+
+      beforeEach(() => {
+        manager.settleWindowMs = SETTLE_WINDOW_MS
+      })
+
+      afterEach(() => {
+        clock?.restore()
+      })
+
+      async function addEditedBook() {
+        await library.update({ settings: { ...library.settings, autoOrganize: true } })
+        const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+        const targetBefore = await manager.getAutoOrganizeTarget(await loadItem(libraryItemId))
+        await setMetadata(libraryItemId, { title: 'Book Two', authors: ['Writer'] })
+        return { libraryItemId, targetBefore }
+      }
+
+      it('holds a book back while its files are new, then organizes it once they have settled', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'Date'], now: Date.now() })
+        const background = sinon.spy(manager, 'autoOrganizeItemsInBackground')
+        const runTask = sinon.spy(manager, 'runTask')
+
+        expect(await manager.autoOrganizeItem(libraryItemId, targetBefore)).to.be.null
+        expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+
+        await clock.tickAsync(SETTLE_WINDOW_MS)
+        await background.returnValues[0]
+        await runTask.firstCall.returnValue
+        expect(fs.existsSync(rel('Writer', 'Book Two', 'Book Two.m4b'))).to.be.true
+      })
+
+      it('organizes at once when the files have settled', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'Date'], now: Date.now() + 2 * SETTLE_WINDOW_MS })
+
+        const movedItem = await manager.autoOrganizeItem(libraryItemId, targetBefore)
+
+        expect(movedItem.path).to.equal(rel('Writer', 'Book Two'))
+      })
+
+      it('keeps one retry per item', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        clock = sinon.useFakeTimers({ toFake: ['setTimeout', 'Date'], now: Date.now() })
+
+        await manager.autoOrganizeItem(libraryItemId, targetBefore)
+        await manager.autoOrganizeItem(libraryItemId, targetBefore)
+        await manager.autoOrganizeItemsInBackground(new Map([[libraryItemId, targetBefore]]))
+
+        expect(clock.countTimers()).to.equal(1)
+      })
+
+      it('holds back the books of a batch edit that have new files and organizes the others', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        const settledId = await addBook('Settled', ['b.m4b'], { title: 'Settled', authors: ['Writer'] })
+        const settledTargetBefore = await manager.getAutoOrganizeTarget(await loadItem(settledId))
+        await setMetadata(settledId, { title: 'Settled Two', authors: ['Writer'] })
+        manager.settleWindowMs = 0
+        sinon.stub(manager, 'hasFilesChangedRecently').callsFake(async (id) => id === libraryItemId)
+        clock = sinon.useFakeTimers({ toFake: ['setTimeout'] })
+        const runTask = sinon.spy(manager, 'runTask')
+
+        await manager.autoOrganizeItemsInBackground(
+          new Map([
+            [libraryItemId, targetBefore],
+            [settledId, settledTargetBefore]
+          ])
+        )
+        await runTask.firstCall.returnValue
+
+        expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+        expect(fs.existsSync(rel('Writer', 'Settled Two', 'Settled Two.m4b'))).to.be.true
+      })
+
+      it('does not count the metadata file and cover the server writes', async () => {
+        const { libraryItemId, targetBefore } = await addEditedBook()
+        const coverPath = rel('Raw', 'cover.jpg')
+        await Database.bookModel.update({ coverPath }, { where: { id: (await loadItem(libraryItemId)).mediaId } })
+        manager.settleWindowMs = 300
+        await new Promise((resolve) => setTimeout(resolve, 350))
+        fs.writeFileSync(coverPath, 'cover')
+        fs.writeFileSync(rel('Raw', 'metadata.json'), '{}')
+
+        const movedItem = await manager.autoOrganizeItem(libraryItemId, targetBefore)
+
+        expect(movedItem.path).to.equal(rel('Writer', 'Book Two'))
+      })
+    })
+
     it('logs the error of a failed library lookup and starts no task', async () => {
       const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
       const lookupError = new Error('lookup exploded')
@@ -1638,6 +1735,83 @@ describe('OrganizeManager', () => {
         expect(await getIdByName('Old')).to.be.null
       })
     }
+    describe('renaming and removing genres and narrators', () => {
+      const LIBRARY_TEMPLATES = { organizeFolderTemplate: '{genre}/{narrator}/{title}' }
+
+      async function addBookWith(relDir, { genres = [], narrators = [] }) {
+        const libraryItemId = await addBook(relDir, ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
+        await Database.bookModel.update({ genres, narrators }, { where: { id: (await loadItem(libraryItemId)).mediaId } })
+        return libraryItemId
+      }
+
+      function renameGenre(genre, newGenre) {
+        return runEditAndWaitForOrganize(async () => {
+          await libraryFilters.getFilterData('book', library.id)
+          await MiscController.renameGenre.call({ organizeManager: manager }, { user: { isAdminOrUp: true }, body: { genre, newGenre } }, makeRes())
+        })
+      }
+
+      function deleteGenre(genre) {
+        return runEditAndWaitForOrganize(async () => {
+          await libraryFilters.getFilterData('book', library.id)
+          await MiscController.deleteGenre.call({ organizeManager: manager }, { user: { isAdminOrUp: true }, params: { genre: encodeURIComponent(Buffer.from(genre).toString('base64')) } }, makeRes())
+        })
+      }
+
+      function editNarrator(method, narrator, body) {
+        return runEditAndWaitForOrganize(async () => {
+          await libraryFilters.getFilterData('book', library.id)
+          const req = { user: { canUpdate: true }, library, params: { narratorId: Buffer.from(narrator).toString('base64') }, body }
+          await LibraryController[method].call({ organizeManager: manager }, req, makeRes())
+        })
+      }
+
+      it('moves the books of a renamed genre', async () => {
+        await enableAutoOrganize(LIBRARY_TEMPLATES)
+        const libraryItemId = await addBookWith('Raw', { genres: ['Old'], narrators: ['Reader'] })
+
+        await renameGenre('Old', 'New')
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('New', 'Reader', 'Book'))
+        expect(fs.existsSync(rel('New', 'Reader', 'Book', 'Book.m4b'))).to.be.true
+      })
+
+      it('moves the books of a deleted genre', async () => {
+        await enableAutoOrganize(LIBRARY_TEMPLATES)
+        const libraryItemId = await addBookWith('Raw', { genres: ['Old'], narrators: ['Reader'] })
+
+        await deleteGenre('Old')
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('Reader', 'Book'))
+      })
+
+      it('moves the books of a renamed narrator', async () => {
+        await enableAutoOrganize(LIBRARY_TEMPLATES)
+        const libraryItemId = await addBookWith('Raw', { genres: ['Fantasy'], narrators: ['Old Reader'] })
+
+        await editNarrator('updateNarrator', 'Old Reader', { name: 'New Reader' })
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('Fantasy', 'New Reader', 'Book'))
+      })
+
+      it('moves the books of a removed narrator', async () => {
+        await enableAutoOrganize(LIBRARY_TEMPLATES)
+        const libraryItemId = await addBookWith('Raw', { genres: ['Fantasy'], narrators: ['Old Reader'] })
+
+        await editNarrator('removeNarrator', 'Old Reader')
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('Fantasy', 'Book'))
+      })
+
+      it('leaves the books alone when the library has auto organize off', async () => {
+        await library.update({ settings: { ...library.settings, ...LIBRARY_TEMPLATES } })
+        const libraryItemId = await addBookWith('Raw', { genres: ['Old'], narrators: ['Reader'] })
+
+        await renameGenre('Old', 'New')
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('Raw'))
+      })
+    })
   })
 
   describe('library scans while organizing', () => {
