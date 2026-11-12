@@ -134,9 +134,7 @@ class Scanner {
 
       SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
 
-      if (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id)) {
-        libraryItem = await Database.libraryItemModel.getExpandedById(libraryItem.id)
-      }
+      libraryItem = (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id)) || libraryItem
     }
 
     return {
@@ -517,6 +515,7 @@ class Scanner {
     const libraryScan = new LibraryScan()
     libraryScan.setData(library, 'match')
     LibraryScanner.librariesScanning.push(libraryScan.libraryId)
+    LibraryScanner.librariesMatching.push(libraryScan.libraryId)
     const taskData = {
       libraryId: library.id
     }
@@ -571,6 +570,7 @@ class Scanner {
 
     delete LibraryScanner.cancelLibraryScan[libraryScan.libraryId]
     LibraryScanner.librariesScanning = LibraryScanner.librariesScanning.filter((lid) => lid !== library.id)
+    LibraryScanner.librariesMatching = LibraryScanner.librariesMatching.filter((lid) => lid !== library.id)
     TaskManager.taskFinished(task)
   }
 }

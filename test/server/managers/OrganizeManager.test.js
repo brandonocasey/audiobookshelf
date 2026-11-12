@@ -2,7 +2,6 @@ const { expect } = require('chai')
 const { Sequelize } = require('sequelize')
 const sinon = require('sinon')
 const fs = require('fs')
-const gracefulFs = require('graceful-fs')
 const os = require('os')
 const path = require('path')
 
@@ -20,6 +19,7 @@ const ToolsController = require('../../../server/controllers/ToolsController')
 const LibraryController = require('../../../server/controllers/LibraryController')
 const LibraryItemController = require('../../../server/controllers/LibraryItemController')
 const MiscController = require('../../../server/controllers/MiscController')
+const FileSystemController = require('../../../server/controllers/FileSystemController')
 const Scanner = require('../../../server/scanner/Scanner')
 const BookFinder = require('../../../server/finders/BookFinder')
 
@@ -63,12 +63,13 @@ describe('OrganizeManager', () => {
   afterEach(async () => {
     sinon.restore()
     LibraryScanner.librariesScanning = []
+    LibraryScanner.librariesMatching = []
     fs.rmSync(tmpDir, { recursive: true, force: true })
     await Database.sequelize.sync({ force: true })
   })
 
   /**
-   * Write the files, scan the folder into a library item and set the metadata the templates use
+   * Write the files, scan the folder and set the metadata the templates use
    */
   async function addBook(relDir, fileNames, { title, authors = [], series = null, sequence = null } = {}) {
     const dir = path.join(libraryDir, relDir)
@@ -105,7 +106,7 @@ describe('OrganizeManager', () => {
       const seriesRow = await Database.seriesModel.create({ name: series, nameIgnorePrefix: series, libraryId: library.id })
       await Database.bookSeriesModel.create({ bookId: book.id, seriesId: seriesRow.id, sequence })
     }
-    // The scanner reads this file back with the highest precedence, so keep it in step with the book like an edit does
+    // The scanner reads this file first, so keep it in step with the book
     await (await Database.libraryItemModel.getExpandedById(libraryItemId)).saveMetadataFile()
   }
 
@@ -123,10 +124,10 @@ describe('OrganizeManager', () => {
 
   /** Every move goes through the copy-and-delete fallback used across file systems */
   function simulateCrossDeviceMoves() {
-    const originalRename = gracefulFs.rename
-    sinon.stub(gracefulFs, 'rename').callsFake((src, dest, callback) => {
-      if (src.endsWith('.tmp')) return originalRename(src, dest, callback)
-      callback(Object.assign(new Error('cross-device link not permitted'), { code: 'EXDEV' }))
+    const originalRename = fsExtra.rename
+    sinon.stub(fsExtra, 'rename').callsFake((src, dest) => {
+      if (src.endsWith('.tmp')) return originalRename(src, dest)
+      return Promise.reject(Object.assign(new Error('cross-device link not permitted'), { code: 'EXDEV' }))
     })
   }
 
@@ -172,7 +173,7 @@ describe('OrganizeManager', () => {
           expect(after.media.audioFiles.every((af) => fs.existsSync(af.metadata.path) && af.metadata.path.startsWith(newDir))).to.be.true
           expect(after.media.title).to.equal('The Way of Kings')
 
-          // Audio files keep their playback order: the first track still holds the content of "Part 1.mp3"
+          // The first track still holds the content of "Part 1.mp3"
           const orderedContent = [...after.media.audioFiles].sort((a, b) => a.index - b.index).map((af) => fs.readFileSync(af.metadata.path, 'utf8'))
           expect(orderedContent).to.deep.equal(['Part 1.mp3', 'Part 2.mp3', 'Part 10.mp3'])
 
@@ -341,6 +342,30 @@ describe('OrganizeManager', () => {
       expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
     })
 
+    it('skips an item whose target folder is inside the folder of another item', async () => {
+      await addBook('Stephen King/The Dark Tower', ['tower.m4b'], { title: 'The Gunslinger', authors: ['Stephen King'], series: 'Other', sequence: '1' })
+      const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'The Drawing of the Three', authors: ['Stephen King'], series: 'The Dark Tower', sequence: '2' })
+
+      const result = await manager.organizeItem(libraryItemId)
+      const preview = await manager.previewItems([libraryItemId])
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'skipped', reason: 'targetInsideItem' })
+      expect(preview.plans[0].skipReason).to.equal('targetInsideItem')
+      expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.m4b', 'Stephen King', 'Stephen King/The Dark Tower', 'Stephen King/The Dark Tower/tower.m4b'])
+    })
+
+    it('skips an item whose target is a dangling symlink and leaves the symlink', async () => {
+      const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+      fs.mkdirSync(rel('Writer'))
+      fs.symlinkSync(rel('nowhere'), rel('Writer', 'Book'))
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'skipped', reason: 'targetExists' })
+      expect(fs.readlinkSync(rel('Writer', 'Book'))).to.equal(rel('nowhere'))
+      expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+    })
+
     it('skips an item when a new file name is already taken or two files would share a name', async () => {
       const taken = await addBook('Writer/Book', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
       fs.writeFileSync(rel('Writer', 'Book', 'Book - Part 1.mp3'), 'unscanned file')
@@ -401,9 +426,8 @@ describe('OrganizeManager', () => {
 
     it('undoes the renames that already happened when the folder move fails', async () => {
       const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
-      const realMove = fsExtra.move
-      const moveStub = sinon.stub(fsExtra, 'move').callsFake(realMove)
-      moveStub.onCall(2).rejects(new Error('disk full'))
+      const realRename = fsExtra.rename
+      sinon.stub(fsExtra, 'rename').callsFake((from, to) => (to === rel('Writer', 'Book') ? Promise.reject(new Error('disk full')) : realRename(from, to)))
 
       const result = await manager.organizeItem(libraryItemId)
 
@@ -414,10 +438,12 @@ describe('OrganizeManager', () => {
 
     it('removes the partial copy a move interrupted across file systems left behind', async () => {
       const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
-      const realMove = fsExtra.move
-      sinon.stub(fsExtra, 'move').callsFake(async (from, to) => {
-        if (!to.endsWith('Book - Part 2.mp3')) return realMove(from, to)
-        fs.writeFileSync(to, 'partial')
+      simulateCrossDeviceMoves()
+      const realCopy = fsExtra.copy
+      sinon.stub(fsExtra, 'copy').callsFake(async (from, to, options) => {
+        if (from !== rel('Raw')) return realCopy(from, to, options)
+        fs.mkdirSync(to)
+        fs.writeFileSync(path.join(to, 'a.mp3'), 'partial')
         throw new Error('disk full')
       })
 
@@ -425,6 +451,7 @@ describe('OrganizeManager', () => {
 
       expect(result).to.deep.equal({ itemId: libraryItemId, status: 'failed', error: 'disk full' })
       expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.mp3', 'Raw/b.mp3'])
+      expect(fs.readFileSync(rel('Raw', 'a.mp3'), 'utf8')).to.equal('a.mp3')
     })
 
     it('rescans the item at its original path when the failure comes after the rescan started', async () => {
@@ -460,12 +487,146 @@ describe('OrganizeManager', () => {
       expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.m4b', 'Writer'])
     })
 
+    it('keeps a folder another writer created at the target after the plan was made', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+      const realWriteJournal = manager.writeJournal.bind(manager)
+      let isTargetCreated = false
+      sinon.stub(manager, 'writeJournal').callsFake(async (journal) => {
+        if (!isTargetCreated) {
+          isTargetCreated = true
+          fs.mkdirSync(rel('Writer', 'Book'), { recursive: true })
+          fs.writeFileSync(rel('Writer', 'Book', 'sentinel.txt'), 'keep me')
+        }
+        return realWriteJournal(journal)
+      })
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result.status).to.equal('failed')
+      expect(result.error).to.include('the destination already exists')
+      expect(fs.readFileSync(rel('Writer', 'Book', 'sentinel.txt'), 'utf8')).to.equal('keep me')
+      expect(listFiles(rel('Raw'))).to.deep.equal(['a.mp3', 'b.mp3'])
+    })
+
+    it('does not replace a file another writer created while a copy across file systems ran', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+      simulateCrossDeviceMoves()
+      const realCopy = fsExtra.copy
+      sinon.stub(fsExtra, 'copy').callsFake(async (from, to, options) => {
+        await realCopy(from, to, options)
+        if (from === rel('Raw', 'a.mp3')) fs.writeFileSync(rel('Raw', 'Book - Part 1.mp3'), 'keep me')
+      })
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result.status).to.equal('failed')
+      expect(fs.readFileSync(rel('Raw', 'Book - Part 1.mp3'), 'utf8')).to.equal('keep me')
+      expect(listFiles(rel('Raw'))).to.deep.equal(['Book - Part 1.mp3', 'a.mp3', 'b.mp3'])
+      expect(fs.readFileSync(rel('Raw', 'a.mp3'), 'utf8')).to.equal('a.mp3')
+    })
+
+    it('restores what a failed source removal deleted from the folder it copied across file systems', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+      simulateCrossDeviceMoves()
+      const realRemove = fsExtra.remove
+      sinon.stub(fsExtra, 'remove').callsFake(async (target) => {
+        if (target !== rel('Raw')) return realRemove(target)
+        fs.rmSync(rel('Raw', 'Book - Part 1.mp3'))
+        throw new Error('permission denied')
+      })
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'failed', error: 'permission denied' })
+      expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.mp3', 'Raw/b.mp3'])
+      expect(fs.readFileSync(rel('Raw', 'a.mp3'), 'utf8')).to.equal('a.mp3')
+      expect(fs.readFileSync(rel('Raw', 'b.mp3'), 'utf8')).to.equal('b.mp3')
+    })
+
+    it('restores the files of a run that crashed after the copy was complete', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+      simulateCrossDeviceMoves()
+      const realRemove = fsExtra.remove
+      sinon.stub(fsExtra, 'remove').callsFake(async (target) => {
+        if (target !== rel('Raw')) return realRemove(target)
+        fs.rmSync(rel('Raw', 'Book - Part 1.mp3'))
+        throw new Error('process killed')
+      })
+      sinon.stub(manager, 'rollback').resolves()
+      await manager.organizeItem(libraryItemId)
+      manager.rollback.restore()
+      fsExtra.remove.restore()
+
+      await new OrganizeManager({ sessions: [] }).recoverInterrupted()
+
+      expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.mp3', 'Raw/b.mp3'])
+      expect(fs.readFileSync(rel('Raw', 'b.mp3'), 'utf8')).to.equal('b.mp3')
+      expect(fs.readdirSync(path.join(global.MetadataPath, 'organize'))).to.deep.equal([])
+    })
+
+    it('moves a rename back when it landed but the step was not recorded as done', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+      const realRename = fsExtra.rename
+      sinon.stub(fsExtra, 'rename').callsFake(async (from, to) => {
+        await realRename(from, to)
+        if (to === rel('Raw', 'Book - Part 1.mp3')) throw new Error('lost connection')
+      })
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'failed', error: 'lost connection' })
+      expect(listFiles(libraryDir)).to.deep.equal(['Raw', 'Raw/a.mp3', 'Raw/b.mp3'])
+    })
+
+    it('renames a file whose new name is the same file under another name', async () => {
+      const libraryItemId = await addBook('Writer/Book', ['book.m4b'], { title: 'Book', authors: ['Writer'] })
+      fs.linkSync(rel('Writer', 'Book', 'book.m4b'), rel('Writer', 'Book', 'Book.m4b'))
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'moved' })
+      expect(fs.readFileSync(rel('Writer', 'Book', 'Book.m4b'), 'utf8')).to.equal('book.m4b')
+    })
+
+    it('renames a folder that a case-insensitive file system reports as already there', async () => {
+      const libraryItemId = await addBook('Writer/book', ['book.m4b'], { title: 'Book', authors: ['Writer'] })
+      const realLstat = fsExtra.lstat
+      sinon.stub(fsExtra, 'lstat').callsFake((target) => realLstat(target === rel('Writer', 'Book') ? rel('Writer', 'book') : target))
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'moved' })
+      expect(listFiles(rel('Writer'))).to.deep.equal(['Book', 'Book/Book.m4b'])
+    })
+
+    it('keeps both names when undoing a rename of a file that is the same file under another name', async () => {
+      const libraryItemId = await addBook('Writer/Book', ['book.m4b'], { title: 'Book', authors: ['Writer'] })
+      fs.linkSync(rel('Writer', 'Book', 'book.m4b'), rel('Writer', 'Book', 'Book.m4b'))
+      sinon.stub(LibraryItemScanner, 'scanLibraryItem').rejects(new Error('scan exploded'))
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result.status).to.equal('failed')
+      expect(listFiles(rel('Writer', 'Book'))).to.deep.equal(['Book.m4b', 'book.m4b'])
+      expect(fs.readFileSync(rel('Writer', 'Book', 'book.m4b'), 'utf8')).to.equal('book.m4b')
+    })
+
+    it('does not remove the copy when it is the source file', async () => {
+      fs.writeFileSync(rel('a.mp3'), 'audio')
+      fs.linkSync(rel('a.mp3'), rel('b.mp3'))
+
+      await manager.restoreSourceFromCopy({ from: rel('a.mp3'), to: rel('b.mp3'), state: 'copied', tempPath: rel('missing.tmp') })
+
+      expect(fs.readFileSync(rel('a.mp3'), 'utf8')).to.equal('audio')
+      expect(fs.readFileSync(rel('b.mp3'), 'utf8')).to.equal('audio')
+    })
+
     it('finishes or rolls back a run that was interrupted before the next startup', async () => {
       const rolledBackId = await addBook('Raw A', ['a.mp3', 'b.mp3'], { title: 'Book A', authors: ['Writer'] })
       sinon.stub(manager, 'rollback').resolves()
       sinon.stub(manager, 'runSteps').callsFake(async (journal) => {
-        await fsExtra.move(journal.steps[0].from, journal.steps[0].to)
-        journal.steps[0].done = true
+        await fsExtra.rename(journal.steps[0].from, journal.steps[0].to)
+        journal.steps[0].state = 'done'
         await manager.writeJournal(journal)
         throw new Error('process killed')
       })
@@ -576,6 +737,21 @@ describe('OrganizeManager', () => {
     })
   })
 
+  describe('tasks with a preview', () => {
+    it('leaves alone the items the preview did not list', async () => {
+      const previewed = await addBook('Raw 1', ['a.m4b'], { title: 'One', authors: ['Writer'] })
+      const notPreviewed = await addBook('Raw 2', ['b.m4b'], { title: 'Two', authors: ['Writer'] })
+      const { plans } = await manager.previewItems([previewed])
+      const task = TaskManager.createAndAddTask('organize-files', { text: 'Organizing files' }, null, true)
+
+      await manager.runTask(task, [previewed, notPreviewed], { [previewed]: plans[0].hash })
+
+      expect(fs.existsSync(rel('Writer', 'One', 'One.m4b'))).to.be.true
+      expect(fs.existsSync(rel('Raw 2', 'b.m4b'))).to.be.true
+      expect(task.data.results).to.deep.equal([{ itemId: notPreviewed, title: 'Two', status: 'skipped', reason: 'notPreviewed' }])
+    })
+  })
+
   describe('task results', () => {
     it('lists at most 100 items that were not organized, while the counts cover all of them', async () => {
       const missingIds = Array.from({ length: 105 }, (_, i) => `li_missing_${i}`)
@@ -593,13 +769,14 @@ describe('OrganizeManager', () => {
     it('only organizes when the library setting is on', async () => {
       const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
 
-      expect(await manager.autoOrganizeItem(libraryItemId)).to.be.false
+      expect(await manager.autoOrganizeItem(libraryItemId)).to.be.null
       expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
 
       await library.update({ settings: { ...library.settings, autoOrganize: true } })
-      expect(await manager.autoOrganizeItem(libraryItemId)).to.be.true
+      const movedItem = await manager.autoOrganizeItem(libraryItemId)
+      expect(movedItem.path).to.equal(rel('Writer', 'Book'))
       expect(fs.existsSync(rel('Writer', 'Book', 'Book.m4b'))).to.be.true
-      expect(await manager.autoOrganizeItem(libraryItemId)).to.be.false
+      expect(await manager.autoOrganizeItem(libraryItemId)).to.be.null
     })
 
     it('runs after a metadata edit through the controller and returns the moved item', async () => {
@@ -615,16 +792,32 @@ describe('OrganizeManager', () => {
       expect(res.json.firstCall.args[0].libraryItem.path).to.equal(rel('Writer', 'Book Two'))
     })
 
-    it('runs after a batch edit', async () => {
+    it('runs a batch edit in a background task after the response', async () => {
       await library.update({ settings: { ...library.settings, autoOrganize: true } })
       const libraryItemId = await addBook('Writer/Book', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
       const req = { user: { canUpdate: true, checkCanAccessLibraryItem: () => true }, body: [{ id: libraryItemId, mediaPayload: { metadata: { title: 'Book Two' } } }] }
-      const res = { json: sinon.spy() }
+      let wasMovedAtResponse = null
+      const res = { json: sinon.spy(() => (wasMovedAtResponse = fs.existsSync(rel('Writer', 'Book Two')))) }
+      const runTask = sinon.spy(manager, 'runTask')
+      sinon.spy(manager, 'autoOrganizeItemsInBackground')
 
       await LibraryItemController.batchUpdate.call({ organizeManager: manager }, req, res)
+      await manager.autoOrganizeItemsInBackground.returnValues[0]
+      await runTask.firstCall.returnValue
 
       expect(res.json.firstCall.args[0]).to.deep.equal({ success: true, updates: 1 })
+      expect(wasMovedAtResponse).to.be.false
       expect(fs.existsSync(rel('Writer', 'Book Two', 'Book Two.m4b'))).to.be.true
+    })
+
+    it('leaves a batch edit alone when its library has auto organize off', async () => {
+      const libraryItemId = await addBook('Writer/Book', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
+      const startTask = sinon.spy(manager, 'startTask')
+
+      await manager.autoOrganizeItemsInBackground([libraryItemId])
+
+      expect(startTask.called).to.be.false
+      expect(fs.existsSync(rel('Writer', 'Book', 'Book.m4b'))).to.be.true
     })
 
     it('runs after a quick match and returns the moved item', async () => {
@@ -637,6 +830,31 @@ describe('OrganizeManager', () => {
       expect(result.updated).to.be.true
       expect(fs.existsSync(rel('Writer', 'Matched Title', 'Matched Title.m4b'))).to.be.true
       expect(result.libraryItem.path).to.equal(rel('Writer', 'Matched Title'))
+    })
+
+    it('organizes the items a match all run matched, but not during a file scan', async () => {
+      await library.update({ settings: { ...library.settings, autoOrganize: true } })
+      const matchedId = await addBook('Writer/Book', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
+      sinon
+        .stub(BookFinder, 'search')
+        .onFirstCall()
+        .resolves([{ title: 'Matched Title', author: 'Writer' }])
+        .onSecondCall()
+        .resolves([{ title: 'Second Title', author: 'Writer' }])
+      Database.serverSettings = { scannerFindCovers: false, scannerPreferMatchedMetadata: true }
+
+      await Scanner.matchLibraryItems({ organizeManager: manager }, library)
+
+      expect(fs.existsSync(rel('Writer', 'Matched Title', 'Matched Title.m4b'))).to.be.true
+      expect((await loadItem(matchedId)).path).to.equal(rel('Writer', 'Matched Title'))
+      expect(LibraryScanner.isLibraryScanning(library.id)).to.be.false
+      expect(LibraryScanner.librariesMatching).to.deep.equal([])
+
+      LibraryScanner.librariesScanning = [library.id]
+      const result = await Scanner.quickMatchLibraryItem({ organizeManager: manager }, await loadItem(matchedId), { provider: 'google', overrideDetails: true })
+
+      expect(result.libraryItem.media.metadata.title).to.equal('Second Title')
+      expect(listFiles(rel('Writer'))).to.deep.equal(['Matched Title', 'Matched Title/Matched Title.m4b'])
     })
 
     it('does not run when the edit changed nothing', async () => {
@@ -722,6 +940,18 @@ describe('OrganizeManager', () => {
       }
     })
 
+    it('keeps the type error for other settings when a library is created or updated', async () => {
+      const updateRes = makeRes()
+      await LibraryController.update.call({ organizeManager: manager }, { user: adminUser, body: { settings: { autoOrganize: 'yes' } }, library }, updateRes)
+      const createRes = makeRes()
+      await LibraryController.create.call({}, { user: adminUser, body: { name: 'New', folders: [{ path: path.join(tmpDir, 'new') }], settings: { autoOrganize: 'yes' } } }, createRes)
+
+      for (const res of [updateRes, createRes]) {
+        expect(res.statusCode).to.equal(400)
+        expect(res.body).to.equal('Invalid request. Setting "autoOrganize" must be of type boolean')
+      }
+    })
+
     it('rejects invalid templates when a library is created', async () => {
       const invalidTemplates = [{ organizeFolderTemplate: '{author}/{unknown}' }, { organizeFileTemplate: '{title}/{track}' }]
       for (const settings of invalidTemplates) {
@@ -735,8 +965,8 @@ describe('OrganizeManager', () => {
     })
 
     it('starts organizing the whole library when a template changes, and only then', async () => {
-      const organizeLibrary = sinon.stub()
-      const context = { organizeManager: { organizeLibrary } }
+      const organizeLibrary = sinon.stub(manager, 'organizeLibrary')
+      const context = { organizeManager: manager }
       const update = (settings) => LibraryController.update.call(context, { user: adminUser, body: { settings }, library }, makeRes())
 
       await update({ autoOrganize: true, organizeFolderTemplate: '{author}/{title}' })
@@ -754,8 +984,8 @@ describe('OrganizeManager', () => {
     it('treats a library saved before the organize settings existed as using the defaults', async () => {
       const oldLibrary = await Database.libraryModel.create({ name: 'Old', mediaType: 'book', settings: { coverAspectRatio: 1 } })
       oldLibrary.libraryFolders = []
-      const organizeLibrary = sinon.stub()
-      const update = (settings) => LibraryController.update.call({ organizeManager: { organizeLibrary } }, { user: adminUser, body: { settings }, library: oldLibrary }, makeRes())
+      const organizeLibrary = sinon.stub(manager, 'organizeLibrary')
+      const update = (settings) => LibraryController.update.call({ organizeManager: manager }, { user: adminUser, body: { settings }, library: oldLibrary }, makeRes())
 
       await update({ organizeFolderTemplate: '{author}/{series}/<{sequence}. >{title}' })
       expect(organizeLibrary.called).to.be.false
@@ -799,6 +1029,70 @@ describe('OrganizeManager', () => {
       await upload(library.id, { title: 'Solo' }, ['x.m4b'])
 
       expect(listFiles(libraryDir)).to.deep.equal(['Solo', 'Solo/Solo.m4b'])
+    })
+
+    it('refuses an upload whose rendered folder already exists and writes nothing', async () => {
+      await library.update({ settings: { ...library.settings, organizeFolderTemplate: '{author}/{title}' } })
+      fs.mkdirSync(rel('Terry Pratchett', 'Mort'), { recursive: true })
+      fs.writeFileSync(rel('Terry Pratchett', 'Mort', 'Mort.m4b'), 'original')
+
+      const res = await upload(library.id, { title: 'Mort', author: 'Terry Pratchett', series: 'Discworld' }, ['new.m4b', 'cover.jpg'])
+
+      expect(res.status.calledWith(409)).to.be.true
+      expect(res.send.firstCall.args[0]).to.equal('Cannot upload to "Terry Pratchett/Mort": the folder already exists')
+      expect(res.sendStatus.called).to.be.false
+      expect(listFiles(libraryDir)).to.deep.equal(['Terry Pratchett', 'Terry Pratchett/Mort', 'Terry Pratchett/Mort/Mort.m4b'])
+      expect(fs.readFileSync(rel('Terry Pratchett', 'Mort', 'Mort.m4b'), 'utf8')).to.equal('original')
+    })
+
+    it('refuses an upload that would land inside the folder of a library item', async () => {
+      await addBook('Stephen King/The Dark Tower', ['tower.m4b'], { title: 'The Gunslinger', authors: ['Stephen King'] })
+
+      const res = await upload(library.id, { title: 'The Drawing of the Three', author: 'Stephen King', series: 'The Dark Tower' }, ['a.m4b'])
+
+      expect(res.status.calledWith(409)).to.be.true
+      expect(res.send.firstCall.args[0]).to.equal('Cannot upload to "Stephen King/The Dark Tower/The Drawing of the Three": it is inside the folder of the library item "The Dark Tower"')
+      expect(listFiles(libraryDir)).to.deep.equal(['Stephen King', 'Stephen King/The Dark Tower', 'Stephen King/The Dark Tower/tower.m4b'])
+    })
+
+    it('refuses an upload when the folder appears right before it is created', async () => {
+      sinon.stub(fsExtra, 'mkdir').rejects(Object.assign(new Error('exists'), { code: 'EEXIST' }))
+
+      const res = await upload(library.id, { title: 'Solo' }, ['x.m4b'])
+
+      expect(res.status.calledWith(409)).to.be.true
+      expect(res.sendStatus.called).to.be.false
+      expect(listFiles(libraryDir)).to.deep.equal([])
+    })
+
+    it('saves a file under its sanitized name when the file template renders no name', async () => {
+      await library.update({ settings: { ...library.settings, organizeFileTemplate: '{subtitle}' } })
+
+      await upload(library.id, { title: 'Solo' }, ['Chapter: 1?.mp3'])
+
+      expect(listFiles(libraryDir)).to.deep.equal(['Solo', 'Solo/Chapter - 1.mp3'])
+    })
+
+    it('tells the client the folder an upload goes to and whether it is taken', async () => {
+      await addBook('Stephen King/The Dark Tower', ['tower.m4b'], { title: 'The Gunslinger', authors: ['Stephen King'] })
+      const check = async (body) => {
+        const res = { status: sinon.stub().returnsThis(), send: sinon.spy(), sendStatus: sinon.spy(), json: sinon.spy() }
+        await MiscController.getUploadTarget.call({}, { user: { canUpload: true, checkCanAccessLibrary: () => true }, body: { library: library.id, folder: libraryFolder.id, ...body } }, res)
+        return res.json.firstCall.args[0]
+      }
+
+      expect(await check({ title: 'Free', author: 'Writer', series: 'Saga' })).to.deep.equal({ directory: 'Writer/Saga/Free', exists: false, libraryItemTitle: undefined })
+      expect(await check({ title: 'Nested', author: 'Stephen King', series: 'The Dark Tower' })).to.deep.equal({ directory: 'Stephen King/The Dark Tower/Nested', exists: true, libraryItemTitle: 'The Dark Tower' })
+      expect((await check({ title: 'The Dark Tower', author: 'Stephen King' })).exists).to.be.true
+    })
+
+    it('finds a library item folder at any depth above the path', async () => {
+      await addBook('Top', ['top.m4b'], { title: 'Top Book', authors: ['Writer'] })
+      const res = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await FileSystemController.checkPathExists.call({}, { user: { canUpload: true, checkCanAccessLibrary: () => true }, body: { directory: 'Top/A/B/C', folderPath: libraryDir } }, res)
+
+      expect(res.json.firstCall.args[0]).to.deep.equal({ exists: true, libraryItemTitle: 'Top' })
     })
 
     it('keeps the podcast upload layout', async () => {

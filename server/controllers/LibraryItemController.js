@@ -279,9 +279,7 @@ class LibraryItemController {
       Logger.debug(`[LibraryItemController] Updated library item media ${req.libraryItem.media.title}`)
       SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
 
-      if (await this.organizeManager.autoOrganizeItem(req.libraryItem.id)) {
-        req.libraryItem = await Database.libraryItemModel.getExpandedById(req.libraryItem.id)
-      }
+      req.libraryItem = (await this.organizeManager.autoOrganizeItem(req.libraryItem.id)) || req.libraryItem
     }
     res.json({
       updated: hasUpdates,
@@ -731,14 +729,13 @@ class LibraryItemController {
       await this.checkRemoveAuthorsWithNoBooks(authorIdsRemoved)
     }
 
-    for (const libraryItemId of updatedLibraryItemIds) {
-      await this.organizeManager.autoOrganizeItem(libraryItemId)
-    }
-
     res.json({
       success: true,
       updates: itemsUpdated
     })
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(updatedLibraryItemIds)
   }
 
   /**

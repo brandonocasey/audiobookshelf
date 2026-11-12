@@ -143,31 +143,8 @@ function renderNodes(nodes, values) {
   return output
 }
 
-/**
- * @param {string} template
- * @returns {string|null} Error message or null when the template is valid
- */
-function getFolderTemplateError(template) {
-  try {
-    parseFolderTemplate(template)
-    return null
-  } catch (error) {
-    return error.message
-  }
-}
-
-/**
- * @param {string} template
- * @returns {string|null} Error message or null when the template is valid
- */
-function getFileTemplateError(template) {
-  try {
-    parseFileTemplate(template)
-    return null
-  } catch (error) {
-    return error.message
-  }
-}
+const TEMPLATE_PARSERS = { organizeFolderTemplate: parseFolderTemplate, organizeFileTemplate: parseFileTemplate }
+const TEMPLATE_SETTING_KEYS = Object.keys(TEMPLATE_PARSERS)
 
 /**
  * @param {'organizeFolderTemplate'|'organizeFileTemplate'} key Library setting key
@@ -175,7 +152,12 @@ function getFileTemplateError(template) {
  * @returns {string|null} Error message or null when the template is valid
  */
 function getTemplateSettingError(key, template) {
-  return key === 'organizeFolderTemplate' ? getFolderTemplateError(template) : getFileTemplateError(template)
+  try {
+    TEMPLATE_PARSERS[key](template)
+    return null
+  } catch (error) {
+    return error.message
+  }
 }
 
 /**
@@ -250,8 +232,8 @@ function formatTrackNumber(position, count) {
 const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
 
 /**
- * Names for uploaded files. Audio files are numbered in natural sort order of the uploaded names.
- * A lone ebook is renamed too. Files are left alone when the renamed names would collide.
+ * New names for uploaded audio files (numbered in natural sort order) and a lone ebook.
+ * Returns no renames when the new names would collide.
  *
  * @param {string} fileTemplate
  * @param {Object<string,string>} values
@@ -266,10 +248,10 @@ function getUploadedFileNames(fileTemplate, values, uploadedNames) {
   const newNames = new Map()
   audioNames.forEach((name, i) => {
     const fileValues = { ...values, track: formatTrackNumber(i + 1, audioNames.length) }
-    newNames.set(name, renderFileName(fileTemplate, fileValues, Path.extname(name)) || name)
+    newNames.set(name, renderFileName(fileTemplate, fileValues, Path.extname(name)) || sanitizeFilename(name))
   })
   if (ebookNames.length === 1) {
-    newNames.set(ebookNames[0], renderFileName(fileTemplate, values, Path.extname(ebookNames[0])) || ebookNames[0])
+    newNames.set(ebookNames[0], renderFileName(fileTemplate, values, Path.extname(ebookNames[0])) || sanitizeFilename(ebookNames[0]))
   }
 
   const lowerNewNames = [...newNames.values()].map((name) => name.toLowerCase())
@@ -277,8 +259,8 @@ function getUploadedFileNames(fileTemplate, values, uploadedNames) {
 }
 
 /**
- * Where an upload goes: folder segments below the library folder and the new name for each file.
- * The upload form has no sequence, narrator, year and so on, so those tokens render empty.
+ * Folder segments and new file names for an upload.
+ * The upload form has no sequence, narrator or year, so those tokens render empty.
  *
  * @param {{organizeFolderTemplate:string, organizeFileTemplate:string}} librarySettings
  * @param {{title:string, author:string|null, series:string|null}} details
@@ -310,7 +292,7 @@ const SAMPLE_BOOK = {
 }
 
 /**
- * Render the templates for a sample book, for showing what a template does while it is edited
+ * Render the templates for a sample book
  *
  * @param {string} folderTemplate
  * @param {string} fileTemplate
@@ -333,6 +315,7 @@ module.exports = {
   DEFAULT_FILE_TEMPLATE,
   FOLDER_TOKENS,
   FILE_TOKENS,
+  TEMPLATE_SETTING_KEYS,
   getTemplateSettingError,
   getTemplateValues,
   renderFolderSegments,

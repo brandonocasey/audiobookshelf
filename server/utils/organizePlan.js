@@ -1,7 +1,8 @@
 const Path = require('path')
 const crypto = require('crypto')
 const fs = require('../libs/fsExtra')
-const { filePathToPOSIX, isSameOrSubPath } = require('./fileUtils')
+const Database = require('../Database')
+const { filePathToPOSIX, isSameOrSubPath, isPathTakenByOther } = require('./fileUtils')
 const { getBookDataFromDir } = require('./scandir')
 const { getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumber } = require('./organizeTemplate')
 
@@ -27,7 +28,7 @@ const { getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumb
  * @property {OrganizeWarning[]} warnings
  * @property {string|null} skipReason
  * @property {boolean} changed
- * @property {string|null} hash Identifies the moves so a confirmed run can detect a changed plan
+ * @property {string|null} hash Identifies the moves
  */
 
 /**
@@ -49,7 +50,7 @@ function getTemplateMetadata(media) {
 }
 
 /**
- * Audio files in playback order followed by the ebook, each with the values for the file template
+ * Audio files in playback order, then the ebook, with their file template values
  *
  * @param {import('../models/Book')} media
  * @returns {{path:string, filename:string, ext:string, fileValues:{track?:string, disc?:string}}[]}
@@ -73,7 +74,7 @@ function getFilesToRename(media) {
 }
 
 /**
- * Metadata the scanner would read from the new folder path when it differs from the current metadata
+ * Metadata fields the scanner would read differently from the new folder path
  *
  * @param {import('../models/Book')} media
  * @param {string} toRelPath
@@ -97,32 +98,8 @@ function getParseWarnings(media, toRelPath) {
 }
 
 /**
- * @param {string} path
- * @returns {Promise<{dev:number, ino:number}|null>}
- */
-async function statIdentity(path) {
-  const stat = await fs.stat(path).catch(() => null)
-  return stat ? { dev: stat.dev, ino: stat.ino } : null
-}
-
-/**
- * True when a different file or folder already exists at the path.
- * The same file under another letter case (case-insensitive file systems) is not a conflict.
- *
- * @param {string|null} fromPath Null when nothing at the target path may be treated as the same file
- * @param {string} toPath
- * @returns {Promise<boolean>}
- */
-async function isPathTakenByOther(fromPath, toPath) {
-  const target = await statIdentity(toPath)
-  if (!target) return false
-  const source = fromPath ? await statIdentity(fromPath) : null
-  return !(source && source.dev === target.dev && source.ino === target.ino)
-}
-
-/**
- * Moves that put the cover and metadata file stored in the server metadata folder next to the book.
- * Only for single-file items; they are the ones that have no folder of their own until organized.
+ * Moves for the cover and metadata file in the server metadata folder.
+ * Only single-file items have no folder of their own.
  *
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {string} toPath
@@ -147,7 +124,7 @@ async function getMetadataFolderMoves(libraryItem, toPath) {
 }
 
 /**
- * Moves that rename files in place, or for a single-file item move the file into the new folder
+ * Moves that rename files in place. A single-file item moves into the new folder instead.
  *
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {string} toPath
@@ -182,7 +159,7 @@ async function hasFileNameConflict(moves) {
 }
 
 /**
- * Paths relative to the item folder for display (the file name for a single-file item), without renames that change nothing
+ * Display paths relative to the item folder, without renames that change nothing
  *
  * @param {OrganizeMove[]} moves
  * @param {string} fromPath
@@ -215,14 +192,16 @@ async function getUnorganizableReason(libraryItem, library) {
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {OrganizePlan} plan Has fromPath and toPath set
  * @param {OrganizeMove[]} fileMoves
+ * @param {string} libraryFolderPath
  * @returns {Promise<string|null>}
  */
-async function getConflictReason(libraryItem, plan, fileMoves) {
+async function getConflictReason(libraryItem, plan, fileMoves, libraryFolderPath) {
   const isFolderChanged = libraryItem.isFile || plan.toPath !== plan.fromPath
   const isNested = isSameOrSubPath(plan.fromPath, plan.toPath) || isSameOrSubPath(plan.toPath, plan.fromPath)
   if (isFolderChanged && !libraryItem.isFile && isNested) return 'targetNested'
+  if (isFolderChanged && (await Database.libraryItemModel.findByAncestorPath(libraryFolderPath, plan.toPath))) return 'targetInsideItem'
 
-  // A single-file item has no folder, so anything at the target path is in the way, even the item file itself
+  // Anything at the target blocks a single-file item, including itself
   if (isFolderChanged && (await isPathTakenByOther(libraryItem.isFile ? null : plan.fromPath, plan.toPath))) return 'targetExists'
 
   if (!libraryItem.isFile && (await hasFileNameConflict(fileMoves))) return 'fileNameConflict'
@@ -230,7 +209,7 @@ async function getConflictReason(libraryItem, plan, fileMoves) {
 }
 
 /**
- * Work out what organizing a book would do. Only reads the file system to check for conflicts.
+ * Work out what organizing a book would do without changing anything.
  * Skip reasons that depend on manager state (scanning, streaming) are not decided here.
  *
  * @param {import('../models/LibraryItem')} libraryItem Expanded book library item
@@ -246,6 +225,7 @@ async function buildPlan(libraryItem, library) {
   plan.skipReason = await getUnorganizableReason(libraryItem, library)
   if (plan.skipReason) return plan
 
+  const libraryFolderPath = filePathToPOSIX(library.libraryFolders.find((folder) => folder.id === libraryItem.libraryFolderId).path)
   const { organizeFolderTemplate, organizeFileTemplate } = library.librarySettings
   const values = getTemplateValues(getTemplateMetadata(media))
   let fileMoves
@@ -255,16 +235,15 @@ async function buildPlan(libraryItem, library) {
       plan.skipReason = 'emptyFolderName'
       return plan
     }
-    const libraryFolder = library.libraryFolders.find((folder) => folder.id === libraryItem.libraryFolderId)
     plan.toRelPath = segments.join('/')
-    plan.toPath = Path.posix.join(filePathToPOSIX(libraryFolder.path), plan.toRelPath)
+    plan.toPath = Path.posix.join(libraryFolderPath, plan.toRelPath)
     fileMoves = getFileMoves(libraryItem, plan.toPath, organizeFileTemplate, values)
   } catch (error) {
     plan.skipReason = 'invalidTemplate'
     return plan
   }
 
-  plan.skipReason = await getConflictReason(libraryItem, plan, fileMoves)
+  plan.skipReason = await getConflictReason(libraryItem, plan, fileMoves, libraryFolderPath)
   if (plan.skipReason) return plan
 
   plan.moves = [...fileMoves]

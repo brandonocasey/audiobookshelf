@@ -78,11 +78,11 @@ components:
             type: string
           example: ['folderStructure', 'audioMetatags', 'nfoFile', 'txtFiles', 'opfFile', 'absMetadata']
         organizeFolderTemplate:
-          description: 'Book libraries only. Template for the folder path of a book below the library folder, used when organizing files. Tokens are {author}, {authors}, {series}, {sequence}, {title}, {subtitle}, {year}, {narrator}, {asin}, {isbn} and {publisher}. Text in <> is left out when a token inside it is empty.'
+          description: 'Book libraries only. Template for the folder path of a book below the library folder. Tokens are {author}, {authors}, {series}, {sequence}, {title}, {subtitle}, {year}, {narrator}, {asin}, {isbn} and {publisher}. Text in <> is left out when a token inside it is empty.'
           type: string
           example: '{author}/{series}/<{sequence}. >{title}'
         organizeFileTemplate:
-          description: 'Book libraries only. Template for the name of audio and ebook files without the extension, used when organizing files. Accepts the folder template tokens plus {track} and {disc}.'
+          description: 'Book libraries only. Template for the name of audio and ebook files without the extension. Accepts the folder template tokens plus {track} and {disc}.'
           type: string
           example: '{title}< - Part {track}>'
         autoOrganize:

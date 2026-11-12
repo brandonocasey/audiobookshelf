@@ -22,6 +22,8 @@ class LibraryScanner {
     this.apiRouter = null
     /** @type {string[]} - library ids */
     this.librariesScanning = []
+    /** @type {string[]} - library ids with a match all run. They are also in librariesScanning */
+    this.librariesMatching = []
 
     this.scanningFilesChanged = false
     /** @type {[import('../Watcher').PendingFileUpdate[], Task][]} */
@@ -34,6 +36,16 @@ class LibraryScanner {
    */
   isLibraryScanning(libraryId) {
     return this.librariesScanning.some((lid) => lid === libraryId)
+  }
+
+  /**
+   * A scan that reads the library folders. A match all run does not count.
+   *
+   * @param {string} libraryId
+   * @returns {boolean}
+   */
+  isLibraryFileScanning(libraryId) {
+    return this.isLibraryScanning(libraryId) && !this.librariesMatching.includes(libraryId)
   }
 
   /**

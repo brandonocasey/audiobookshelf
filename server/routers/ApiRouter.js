@@ -350,6 +350,7 @@ class ApiRouter {
     // Misc Routes
     //
     this.router.post('/upload', requireUploadPermission, fileUploadParser, MiscController.handleUpload.bind(this))
+    this.router.post('/upload/target', requireUploadPermission, MiscController.getUploadTarget.bind(this))
     this.router.get('/tasks', MiscController.getTasks.bind(this))
     this.router.patch('/settings', MiscController.updateServerSettings.bind(this))
     this.router.patch('/sorting-prefixes', MiscController.updateSortingPrefixes.bind(this))

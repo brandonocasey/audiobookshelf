@@ -1,4 +1,5 @@
 const Path = require('path')
+const crypto = require('crypto')
 const fs = require('../libs/fsExtra')
 const Logger = require('../Logger')
 const Database = require('../Database')
@@ -7,13 +8,20 @@ const TaskManager = require('./TaskManager')
 const LibraryScanner = require('../scanner/LibraryScanner')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const { ScanResult } = require('../utils/constants')
-const { filePathToPOSIX, isSameOrSubPath } = require('../utils/fileUtils')
+const { filePathToPOSIX, isSameOrSubPath, getPathIdentity, isSameFile, isPathTakenByOther } = require('../utils/fileUtils')
 const { buildPlan, planToClientJSON } = require('../utils/organizePlan')
+const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
 
 const PREVIEW_CHUNK_SIZE = 50
 const MAX_REPORTED_RESULTS = 100
 
 /**
+ * @typedef OrganizeStep
+ * @property {string} from
+ * @property {string} to
+ * @property {'pending'|'copying'|'copied'|'done'} state Moves across file systems pass copying and copied before done
+ * @property {string|null} tempPath Temp copy next to the destination, set for moves across file systems
+ *
  * @typedef OrganizeResult
  * @property {string} itemId
  * @property {'moved'|'unchanged'|'skipped'|'failed'} status
@@ -29,7 +37,7 @@ const MAX_REPORTED_RESULTS = 100
  * @property {string} fromRelPath
  * @property {string} toPath
  * @property {string} toRelPath
- * @property {{from:string, to:string, done:boolean}[]} steps
+ * @property {OrganizeStep[]} steps
  * @property {string[]} createdDirectories Folders this run creates, deepest first, removed again on rollback
  * @property {boolean} scanStarted Set before the rescan. Once set, a crashed run is finished instead of rolled back
  */
@@ -67,13 +75,13 @@ class OrganizeManager {
    * @returns {string|null}
    */
   getBusyReason(libraryItem) {
-    if (LibraryScanner.isLibraryScanning(libraryItem.libraryId)) return 'libraryScanning'
+    if (LibraryScanner.isLibraryFileScanning(libraryItem.libraryId)) return 'libraryScanning'
     if (this.playbackSessionManager.sessions.some((session) => session.libraryItemId === libraryItem.id)) return 'streaming'
     return null
   }
 
   /**
-   * Work out what organizing the item would do. Used by both preview and execution.
+   * Work out what organizing the item would do.
    *
    * @param {import('../models/LibraryItem')} libraryItem Expanded library item
    * @param {import('../models/Library')} library Library with folders
@@ -122,7 +130,7 @@ class OrganizeManager {
    * Organize one item. Never throws: failures are returned with the original error message.
    *
    * @param {string} libraryItemId
-   * @param {string|null} [expectedHash] Plan hash from a preview. The item is skipped when its plan has changed since
+   * @param {string|null} [expectedHash] Plan hash from a preview. The item is skipped when its plan has changed since the preview
    * @returns {Promise<OrganizeResult>}
    */
   async organizeItem(libraryItemId, expectedHash = null) {
@@ -160,23 +168,47 @@ class OrganizeManager {
   }
 
   /**
-   * Organize the item after an edit when the library has auto organize on. Called by edit and match flows, never by scans.
+   * Ids of the books whose library has auto organize on
+   *
+   * @param {string[]} libraryItemIds
+   * @returns {Promise<string[]>}
+   */
+  async getAutoOrganizeItemIds(libraryItemIds) {
+    const libraryItems = await Database.libraryItemModel.findAll({ where: { id: libraryItemIds, mediaType: 'book' }, attributes: ['id', 'libraryId'] })
+    const libraries = await Database.libraryModel.findAll({ where: { id: [...new Set(libraryItems.map((libraryItem) => libraryItem.libraryId))] } })
+    const autoOrganizeLibraryIds = new Set(libraries.filter((library) => library.librarySettings.autoOrganize).map((library) => library.id))
+    return libraryItems.filter((libraryItem) => autoOrganizeLibraryIds.has(libraryItem.libraryId)).map((libraryItem) => libraryItem.id)
+  }
+
+  /**
+   * Organize the item when its library has auto organize on
    *
    * @param {string} libraryItemId
-   * @returns {Promise<boolean>} True when the item was moved or renamed, so callers should reload it
+   * @returns {Promise<import('../models/LibraryItem')|null>} The reloaded expanded item when it was moved or renamed
    */
   async autoOrganizeItem(libraryItemId) {
-    const libraryItem = await Database.libraryItemModel.findByPk(libraryItemId, { attributes: ['id', 'libraryId', 'mediaType'] })
-    if (libraryItem?.mediaType !== 'book') return false
-
-    const library = await Database.libraryModel.findByPk(libraryItem.libraryId)
-    if (!library.librarySettings.autoOrganize) return false
+    if (!(await this.getAutoOrganizeItemIds([libraryItemId])).length) return null
 
     const result = await this.organizeItem(libraryItemId)
     if (result.status === 'skipped' || result.status === 'failed') {
       Logger.warn(`[OrganizeManager] Auto organize of library item "${libraryItemId}" ${result.status}: ${result.reason || result.error}`)
     }
-    return result.status === 'moved'
+    return result.status === 'moved' ? Database.libraryItemModel.getExpandedById(libraryItemId) : null
+  }
+
+  /**
+   * Start a background task for the items whose library has auto organize on
+   *
+   * @param {string[]} libraryItemIds
+   * @returns {Promise<void>}
+   */
+  async autoOrganizeItemsInBackground(libraryItemIds) {
+    try {
+      const autoOrganizeItemIds = await this.getAutoOrganizeItemIds(libraryItemIds)
+      if (autoOrganizeItemIds.length) this.startTask(autoOrganizeItemIds)
+    } catch (error) {
+      Logger.error('[OrganizeManager] Failed to start auto organize of edited items', error)
+    }
   }
 
   /**
@@ -195,6 +227,20 @@ class OrganizeManager {
   }
 
   /**
+   * Organize all items of a library when an organize template changed
+   *
+   * @param {string} libraryId
+   * @param {import('../models/Library').LibrarySettingsObject} previousSettings
+   * @param {import('../models/Library').LibrarySettingsObject} newSettings
+   * @returns {Promise<void>}
+   */
+  async organizeLibraryIfTemplatesChanged(libraryId, previousSettings, newSettings) {
+    if (TEMPLATE_SETTING_KEYS.some((key) => previousSettings[key] !== newSettings[key])) {
+      await this.organizeLibrary(libraryId)
+    }
+  }
+
+  /**
    * Start a background task that organizes the items one at a time. One failure does not stop the others.
    *
    * @param {string[]} libraryItemIds
@@ -203,7 +249,7 @@ class OrganizeManager {
    */
   startTask(libraryItemIds, planHashes = null) {
     const titleString = { text: 'Organizing files', key: 'MessageTaskOrganizingFiles' }
-    const descriptionString = { text: `${libraryItemIds.length} items`, key: 'MessageTaskOrganizeItemCount', subs: [String(libraryItemIds.length)] }
+    const descriptionString = { text: `Items: ${libraryItemIds.length}`, key: 'MessageTaskOrganizeItemCount', subs: [String(libraryItemIds.length)] }
     const task = TaskManager.createAndAddTask('organize-files', titleString, descriptionString, true)
 
     this.runTask(task, libraryItemIds, planHashes).catch((error) => {
@@ -224,7 +270,8 @@ class OrganizeManager {
     /** @type {OrganizeResult[]} */
     const problems = []
     for (const libraryItemId of libraryItemIds) {
-      const result = await this.organizeItem(libraryItemId, planHashes?.[libraryItemId])
+      const isPreviewed = !planHashes || typeof planHashes[libraryItemId] === 'string'
+      const result = isPreviewed ? await this.organizeItem(libraryItemId, planHashes?.[libraryItemId]) : { itemId: libraryItemId, status: 'skipped', reason: 'notPreviewed' }
       counts[result.status]++
       if (result.status === 'skipped' || result.status === 'failed') {
         Logger.warn(`[OrganizeManager] Library item "${libraryItemId}" ${result.status}: ${result.reason || result.error}`)
@@ -255,7 +302,7 @@ class OrganizeManager {
   }
 
   /**
-   * Carry out the plan: move files and folders, rescan the item at its new path, tidy up.
+   * Move and rename the files, then rescan the item at its new path.
    * On failure the moves are reversed and the original error is thrown.
    *
    * @param {import('../models/LibraryItem')} libraryItem
@@ -274,7 +321,7 @@ class OrganizeManager {
       fromRelPath: plan.fromRelPath,
       toPath: plan.toPath,
       toRelPath: plan.toRelPath,
-      steps: plan.moves.map((move) => ({ ...move, done: false })),
+      steps: plan.moves.map((move) => ({ ...move, state: 'pending', tempPath: null })),
       createdDirectories: await this.getMissingDirectories(plan.toPath, filePathToPOSIX(libraryFolder.path)),
       scanStarted: false
     }
@@ -323,14 +370,56 @@ class OrganizeManager {
    */
   async runSteps(journal) {
     for (const step of journal.steps) {
-      await fs.move(step.from, step.to)
-      step.done = true
-      await this.writeJournal(journal)
+      await this.moveStep(journal, step)
     }
   }
 
   /**
-   * Rescan keeps the library item row (and everything keyed on its id) and refreshes paths, files and cover
+   * Rename the path, or when it is on another file system copy it first. Fails when something already exists at the destination.
+   *
+   * @param {OrganizeJournal} journal
+   * @param {OrganizeStep} step
+   */
+  async moveStep(journal, step) {
+    if (await isPathTakenByOther(step.from, step.to)) {
+      throw new Error(`Cannot move "${step.from}" to "${step.to}": the destination already exists`)
+    }
+    await fs.ensureDir(Path.posix.dirname(step.to))
+    try {
+      await fs.rename(step.from, step.to)
+    } catch (error) {
+      if (error.code !== 'EXDEV') throw error
+      await this.copyAcrossFileSystems(journal, step)
+    }
+    step.state = 'done'
+    await this.writeJournal(journal)
+  }
+
+  /**
+   * Copy to a temp name, rename it into place, then remove the source.
+   * The journal records progress so a failed run can restore the source.
+   *
+   * @param {OrganizeJournal} journal
+   * @param {OrganizeStep} step
+   */
+  async copyAcrossFileSystems(journal, step) {
+    step.tempPath = Path.posix.join(Path.posix.dirname(step.to), `.organize-${crypto.randomUUID()}.tmp`)
+    step.state = 'copying'
+    await this.writeJournal(journal)
+    await fs.copy(step.from, step.tempPath, { overwrite: false, errorOnExist: true })
+    step.state = 'copied'
+    await this.writeJournal(journal)
+
+    // The copy can take long enough for another writer to create the destination
+    if (await isPathTakenByOther(null, step.to)) {
+      throw new Error(`Cannot move "${step.from}" to "${step.to}": the destination already exists`)
+    }
+    await fs.rename(step.tempPath, step.to)
+    await fs.remove(step.from)
+  }
+
+  /**
+   * Rescan keeps the library item row and refreshes its paths, files and cover
    *
    * @param {OrganizeJournal} journal
    * @param {string} path Absolute path of the item
@@ -345,7 +434,7 @@ class OrganizeManager {
   }
 
   /**
-   * Reverse the moves of a failed run. Keeps the journal when something could not be reversed so it can be retried at startup.
+   * Reverse the moves of a failed run. Keeps the journal when a move could not be reversed.
    *
    * @param {OrganizeJournal} journal
    */
@@ -374,9 +463,9 @@ class OrganizeManager {
     let isUndone = true
     for (const step of [...journal.steps].reverse()) {
       try {
-        await this.undoStep(step)
+        await this.undoStep(journal, step)
       } catch (error) {
-        Logger.error(`[OrganizeManager] Failed to move "${step.to}" back to "${step.from}"`, error)
+        Logger.error(`[OrganizeManager] Failed to undo the move of "${step.from}" to "${step.to}"`, error)
         isUndone = false
       }
     }
@@ -384,22 +473,47 @@ class OrganizeManager {
   }
 
   /**
-   * @param {{from:string, to:string, done:boolean}} step
+   * Put the step's source back without removing anything this run did not create. Safe to repeat.
+   *
+   * @param {OrganizeJournal} journal
+   * @param {OrganizeStep} step
    */
-  async undoStep(step) {
-    const hasDestination = await fs.pathExists(step.to)
-    if (!hasDestination) return
-
-    if (await fs.pathExists(step.from)) {
-      // An interrupted move across file systems leaves a partial copy at the destination. The destination did not exist before this run.
-      if (!step.done) await fs.remove(step.to)
-      return
+  async undoStep(journal, step) {
+    if (step.state === 'copying') {
+      await fs.remove(step.tempPath)
+    } else if (step.state === 'copied') {
+      await this.restoreSourceFromCopy(step)
+    } else if (await this.isMovedAway(step)) {
+      await this.moveStep(journal, { from: step.to, to: step.from, state: 'pending', tempPath: null })
     }
-    await fs.move(step.to, step.from)
   }
 
   /**
-   * The path and its parents below the library folder that do not exist yet, deepest first
+   * A pending step may have renamed the path before its journal write
+   *
+   * @param {OrganizeStep} step
+   * @returns {Promise<boolean>}
+   */
+  async isMovedAway(step) {
+    if (!(await getPathIdentity(step.to))) return false
+    return step.state === 'done' || !(await getPathIdentity(step.from))
+  }
+
+  /**
+   * Copy back what a partly failed source removal deleted, then drop the copy
+   *
+   * @param {OrganizeStep} step
+   */
+  async restoreSourceFromCopy(step) {
+    const copyPath = (await getPathIdentity(step.tempPath)) ? step.tempPath : step.to
+    if (!(await getPathIdentity(copyPath)) || (await isSameFile(copyPath, step.from))) return
+
+    await fs.copy(copyPath, step.from, { overwrite: false, errorOnExist: false })
+    await fs.remove(copyPath)
+  }
+
+  /**
+   * Missing folders of the path below the library folder, deepest first
    *
    * @param {string} path
    * @param {string} libraryFolderPath
@@ -487,8 +601,7 @@ class OrganizeManager {
   }
 
   /**
-   * Handle journals left by a crash. A run that had not started the rescan is rolled back,
-   * one that had is finished by rescanning the item at its new path.
+   * Handle journals left by a crash. Rolls back runs that had not started the rescan and finishes the others.
    */
   async recoverInterrupted() {
     const journalFiles = await fs.readdir(this.journalDirectory).catch(() => [])

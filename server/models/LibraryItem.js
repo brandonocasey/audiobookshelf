@@ -3,7 +3,7 @@ const { DataTypes, Model } = require('sequelize')
 const fsExtra = require('../libs/fsExtra')
 const Logger = require('../Logger')
 const libraryFilters = require('../utils/queries/libraryFilters')
-const { filePathToPOSIX, getFileTimestampsWithIno } = require('../utils/fileUtils')
+const { filePathToPOSIX, getFileTimestampsWithIno, isSameOrSubPath } = require('../utils/fileUtils')
 const LibraryFile = require('../objects/files/LibraryFile')
 const Book = require('./Book')
 const Podcast = require('./Podcast')
@@ -576,6 +576,27 @@ class LibraryItem extends Model {
    */
   static async checkExistsById(libraryItemId) {
     return (await this.count({ where: { id: libraryItemId } })) > 0
+  }
+
+  /**
+   * Library item whose folder contains the path, below the library folder.
+   * Books inside another book's folder are scanned as part of it.
+   * See: https://github.com/advplyr/audiobookshelf/issues/4146
+   *
+   * @param {string} libraryFolderPath
+   * @param {string} path
+   * @returns {Promise<LibraryItem|null>}
+   */
+  static async findByAncestorPath(libraryFolderPath, path) {
+    const folderPath = filePathToPOSIX(libraryFolderPath)
+    const ancestorPaths = []
+    let directory = Path.posix.dirname(filePathToPOSIX(path))
+    while (directory !== folderPath && isSameOrSubPath(folderPath, directory)) {
+      ancestorPaths.push(directory)
+      directory = Path.posix.dirname(directory)
+    }
+    if (!ancestorPaths.length) return null
+    return this.findOne({ where: { path: ancestorPaths } })
   }
 
   /**

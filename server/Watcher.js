@@ -416,7 +416,7 @@ class FolderWatcher extends EventEmitter {
       this.pendingDirsToRemoveFromIgnore.push(path)
     }
 
-    // The timer is shared, so one call must release every directory that is pending
+    // The timer is shared, so one call MUST release every directory that is pending
     clearTimeout(this.removeFromIgnoreTimer)
     this.removeFromIgnoreTimer = setTimeout(() => {
       Logger.debug(`[Watcher] removeIgnoreDir: No longer ignoring directories "${this.pendingDirsToRemoveFromIgnore.join('", "')}"`)

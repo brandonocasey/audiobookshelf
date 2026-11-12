@@ -38,6 +38,44 @@ function isSameOrSubPath(parentPath, childPath) {
 }
 module.exports.isSameOrSubPath = isSameOrSubPath
 
+/**
+ * Identity of what is at the path. Symlinks are not followed.
+ *
+ * @param {string} path
+ * @returns {Promise<{dev:number, ino:number}|null>} Null when nothing is at the path
+ */
+async function getPathIdentity(path) {
+  const stat = await fs.lstat(path).catch(() => null)
+  return stat ? { dev: stat.dev, ino: stat.ino } : null
+}
+module.exports.getPathIdentity = getPathIdentity
+
+/**
+ * Whether both paths are one file, such as names differing only in letter case
+ *
+ * @param {string} pathA
+ * @param {string} pathB
+ * @returns {Promise<boolean>}
+ */
+async function isSameFile(pathA, pathB) {
+  const [identityA, identityB] = await Promise.all([getPathIdentity(pathA), getPathIdentity(pathB)])
+  return !!identityA && !!identityB && identityA.dev === identityB.dev && identityA.ino === identityB.ino
+}
+module.exports.isSameFile = isSameFile
+
+/**
+ * True when a different file or folder already exists at toPath
+ *
+ * @param {string|null} fromPath Null when nothing at toPath may be treated as the same file
+ * @param {string} toPath
+ * @returns {Promise<boolean>}
+ */
+async function isPathTakenByOther(fromPath, toPath) {
+  if (!(await getPathIdentity(toPath))) return false
+  return !fromPath || !(await isSameFile(fromPath, toPath))
+}
+module.exports.isPathTakenByOther = isPathTakenByOther
+
 function getFileStat(path) {
   try {
     return fs.stat(path)
