@@ -428,9 +428,9 @@ describe('OrganizeManager', () => {
       expect(listFiles(rel('W', 'Writer, Jane', 'Book, The (Fantasy)'))).to.deep.equal(['The Book [aac 64k 2ch] 2of2.mp3', 'The Book [aac 64k 2ch] Intro 1of2.mp3'])
     })
 
-    it('fills the title, tag and audio detail tokens, and each file its own duration', async () => {
-      await library.update({ settings: { ...library.settings, organizeFolderTemplate: '{titleIgnorePrefix}< ({originalYear})> [{format} {channelLayout}]', organizeFileTemplate: '{title}< - {duration}> {track}' } })
-      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'The Book', authors: ['Jane Writer'] })
+    it('fills the title, tag and audio detail tokens, and each file its own duration, format and channel layout', async () => {
+      await library.update({ settings: { ...library.settings, organizeFolderTemplate: '{titleIgnorePrefix}< ({originalYear})> [{format} {channelLayout}]', organizeFileTemplate: '{title}< - {duration}> {track}< {format}>< {channelLayout}>' } })
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'b.m4b', 'c.epub'], { title: 'The Book', authors: ['Jane Writer'] })
       const book = (await loadItem(libraryItemId)).media
       const details = [
         { duration: 5000, channelLayout: 'stereo', tagOriginalYear: '1999' },
@@ -442,7 +442,7 @@ describe('OrganizeManager', () => {
 
       await manager.organizeItem(libraryItemId)
 
-      expect(listFiles(rel('Book (1999) [mp3 stereo]'))).to.deep.equal(['The Book - 1 hr 23 min 1.mp3', 'The Book - 10 min 2.mp3'])
+      expect(listFiles(rel('Book (1999) [mp3 stereo]'))).to.deep.equal(['The Book - 1 hr 23 min 1 mp3 stereo.mp3', 'The Book - 10 min 2 m4b mono.m4b', 'The Book epub.epub'])
     })
 
     it('cleans a file tag title on its own and leaves the names unchanged on a second run', async () => {
@@ -2684,6 +2684,9 @@ describe('OrganizeManager', () => {
       expect(await check({ title: 'Free', author: 'Writer', series: 'Saga' })).to.deep.equal({ directory: 'Writer/Saga/Free', exists: false, libraryItemTitle: undefined })
       expect(await check({ title: 'Nested', author: 'Stephen King', series: 'The Dark Tower' })).to.deep.equal({ directory: 'Stephen King/The Dark Tower/Nested', exists: true, libraryItemTitle: 'The Dark Tower' })
       expect((await check({ title: 'The Dark Tower', author: 'Stephen King' })).exists).to.be.true
+
+      await library.update({ settings: { ...library.settings, organizeFolderTemplate: '{author}/{title}< [{format}]>' } })
+      expect((await check({ title: 'Free', author: 'Writer', fileNames: ['b.m4b', 'a.mp3'] })).directory).to.equal('Writer/Free [mp3]')
     })
 
     it('finds a library item folder at any depth above the path', async () => {

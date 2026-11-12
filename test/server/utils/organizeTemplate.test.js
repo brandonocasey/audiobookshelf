@@ -296,6 +296,15 @@ describe('organizeTemplate', () => {
       expect(newNames.get('y.epub')).to.equal('My Book.epub')
     })
 
+    it('names each uploaded file with its own format and the folder with the first audio file format', () => {
+      const custom = { organizeFolderTemplate: '{title}< [{format}]>', organizeFileTemplate: '{title}< {track}> {format}' }
+      const { folderSegments, newNames } = getUploadLayout(custom, { title: 'My Book', author: null, series: null }, ['y.epub', 'b.M4B', 'a.mp3'])
+      expect(folderSegments).to.deep.equal(['My Book [mp3]'])
+      expect(Object.fromEntries(newNames)).to.deep.equal({ 'a.mp3': 'My Book 1 mp3.mp3', 'b.M4B': 'My Book 2 m4b.M4B', 'y.epub': 'My Book epub.epub' })
+
+      expect(getUploadLayout(custom, { title: 'Ebook', author: null, series: null }, ['y.epub']).folderSegments).to.deep.equal(['Ebook'])
+    })
+
     it('leaves names alone when the template would give two files the same name', () => {
       const custom = { ...settings, organizeFileTemplate: '{title}' }
       const { newNames } = getUploadLayout(custom, { title: 'My Book', author: null, series: null }, ['a.mp3', 'b.mp3'])

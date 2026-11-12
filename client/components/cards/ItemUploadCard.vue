@@ -127,7 +127,8 @@ export default {
       return this.mediaType === 'podcast'
     },
     directoryRequest() {
-      return { library: this.libraryId, folder: this.folderId, title: this.itemData.title, author: this.itemData.author, series: this.itemData.series }
+      const fileNames = this.item.itemFiles.concat(this.item.otherFiles).map((file) => file.name)
+      return { library: this.libraryId, folder: this.folderId, title: this.itemData.title, author: this.itemData.author, series: this.itemData.series, fileNames }
     },
     isNonInteractable() {
       return this.isUploading || this.isFetchingMetadata

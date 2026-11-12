@@ -74,10 +74,11 @@ function getTemplateMetadata(libraryItem) {
 
 /**
  * Playable audio files in play order, then the ebook, with their file template values.
+ * Each file's own format and channel layout replace the first audio file's in its name.
  * Excluded audio files keep their names.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
- * @returns {{path:string, filename:string, ext:string, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
+ * @returns {{path:string, filename:string, ext:string, fileMetadata:{format:string, channelLayout:string|null}, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
  */
 function getFilesToRename(libraryItem) {
   const { media } = libraryItem
@@ -89,6 +90,7 @@ function getFilesToRename(libraryItem) {
       path,
       filename,
       ext,
+      fileMetadata: { format: ext.slice(1), channelLayout: audioFile.channelLayout },
       fileValues: {
         track: formatTrackNumber(i + 1, audioFiles.length),
         trackTotal: audioFiles.length > 1 ? String(audioFiles.length) : '',
@@ -100,7 +102,7 @@ function getFilesToRename(libraryItem) {
   })
   if (media.ebookFile) {
     const { path, filename, ext } = media.ebookFile.metadata
-    files.push({ path, filename, ext, fileValues: {} })
+    files.push({ path, filename, ext, fileMetadata: { format: ext.slice(1), channelLayout: null }, fileValues: {} })
   }
   return files
 }
@@ -118,7 +120,7 @@ function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplat
   const files = getFilesToRename(libraryItem).map((file) => ({
     path: file.path,
     filename: file.filename,
-    newName: renderFileName(organizeFileTemplate, getTemplateValues(metadata, file.fileValues), file.ext) || file.filename
+    newName: renderFileName(organizeFileTemplate, getTemplateValues({ ...metadata, ...file.fileMetadata }, file.fileValues), file.ext) || file.filename
   }))
   return { segments, files }
 }

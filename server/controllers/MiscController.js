@@ -143,7 +143,8 @@ class MiscController {
 
   /**
    * POST: /api/upload/target
-   * Where an upload with these details would be saved and whether that folder is taken
+   * Body: { library, folder, title, author?, series?, fileNames? }
+   * Where an upload with these details and file names would be saved and whether that folder is taken
    *
    * @param {RequestWithUser} req
    * @param {Response} res
@@ -154,7 +155,12 @@ class MiscController {
       return res.sendStatus(403)
     }
 
-    const target = await resolveUploadTarget(req, res, [])
+    const { fileNames = [] } = req.body
+    if (!Array.isArray(fileNames) || fileNames.some((name) => typeof name !== 'string')) {
+      return res.status(400).send('Invalid request body')
+    }
+
+    const target = await resolveUploadTarget(req, res, fileNames)
     if (!target) return
 
     res.json({ directory: target.directory, exists: target.exists, libraryItemTitle: target.libraryItemTitle })
