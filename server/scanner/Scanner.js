@@ -575,17 +575,19 @@ module.exports = new Scanner()
 /**
  * Confidence scores are weighted sums, so a perfect match can come out as 0.9999999999999999
  */
-const MATCH_CONFIDENCE_TOLERANCE = 1e-9
+const MATCH_CONFIDENCE_TOLERANCE = 1e-14
+
+const PERCENT_PER_FRACTION = 100
 
 /**
- * Skip warnings show the match confidence to 2 decimal places of a percent
+ * Skip warnings show the match confidence to this many decimal places of a percent
  */
-const MATCH_CONFIDENCE_PERCENT_SCALE = 100
+const MATCH_CONFIDENCE_PERCENT_DECIMALS = 2
 
 /**
- * Shows any entered minimum in full while dropping float error from dividing it by 100
+ * Keeps every digit a double holds while dropping float error from scaling a fraction to a percent
  */
-const MIN_CONFIDENCE_SIGNIFICANT_DIGITS = 12
+const PERCENT_SIGNIFICANT_DIGITS = 15
 
 /**
  * @param {number} [matchConfidence] - 0-1, unset when the provider gives no confidence
@@ -606,7 +608,8 @@ function isBelowMinConfidence(matchConfidence, minConfidence) {
  */
 function formatMatchConfidence(matchConfidence) {
   if (typeof matchConfidence !== 'number') return 'unknown'
-  return `${Math.floor(matchConfidence * 100 * MATCH_CONFIDENCE_PERCENT_SCALE + MATCH_CONFIDENCE_TOLERANCE) / MATCH_CONFIDENCE_PERCENT_SCALE}%`
+  const decimalScale = 10 ** MATCH_CONFIDENCE_PERCENT_DECIMALS
+  return `${Math.floor(removeFloatError(matchConfidence * PERCENT_PER_FRACTION * decimalScale)) / decimalScale}%`
 }
 
 /**
@@ -614,5 +617,13 @@ function formatMatchConfidence(matchConfidence) {
  * @returns {string}
  */
 function formatMinConfidence(minConfidence) {
-  return `${Number((minConfidence * 100).toPrecision(MIN_CONFIDENCE_SIGNIFICANT_DIGITS))}%`
+  return `${removeFloatError(minConfidence * PERCENT_PER_FRACTION)}%`
+}
+
+/**
+ * @param {number} value
+ * @returns {number} value without float error, so 0.29 * 100 gives 29, not 28.999999999999996
+ */
+function removeFloatError(value) {
+  return Number(value.toPrecision(PERCENT_SIGNIFICANT_DIGITS))
 }
