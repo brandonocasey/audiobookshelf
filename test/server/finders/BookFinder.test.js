@@ -574,6 +574,15 @@ describe('search', () => {
           const results = await bookFinder.search(libraryItemPerfectDuration, provider, 'The Great Novel', 'John Doe, Jane Smith')
           expect(results[0].matchConfidence).to.be.closeTo(1.0, 0.001)
         })
+
+        it('should score the author against the query author when the last search drops the author', async () => {
+          const bookResults = [{ duration: 0, title: 'Shadows', author: 'Other Person' }]
+          runSearchStub.resolves([])
+          runSearchStub.withArgs('shadows', '').resolves(bookResults)
+          const results = await bookFinder.search({ media: { duration: 0 } }, provider, 'Shadows', 'Jane Indie')
+          const expectedConfidence = (W_TITLE * 1.0 + W_AUTHOR * calculateStringMatchScore('jane indie', 'other person')) / (W_TITLE + W_AUTHOR)
+          expect(results[0].matchConfidence).to.be.closeTo(expectedConfidence, 0.001)
+        })
       })
     })
 
@@ -593,6 +602,8 @@ describe('search', () => {
         { name: 'scores a partial title match on title and author weights', ...googleBooks, ...query, title: 'Novel Ex', books: [{ title: 'Novel', author: 'John Doe' }], expectedConfidence: 0.75 },
         // (0.2 * 1 + 0.1 * 0) / 0.3
         { name: 'scores a result without an author as an author mismatch', ...googleBooks, ...query, books: [{ title: 'The Great Novel', author: null }], expectedConfidence: 2 / 3 },
+        // An ASIN-shaped title is only an ASIN lookup for Audible: (0.2 * 1 + 0.1 * 0) / 0.3
+        { name: 'google scores a 10-character title as a title, not an ASIN', ...googleBooks, ...query, title: 'FOUNDATION', books: [{ title: 'FOUNDATION', author: null }], expectedConfidence: 2 / 3 },
         { name: 'custom providers score the title truncated to 500 characters', ...customProvider, ...query, title: 'a'.repeat(600), author: '', books: [{ title: 'a'.repeat(500) }], expectedConfidence: 1.0 },
         { name: 'custom providers leave results unscored without a title query', ...customProvider, ...query, title: '', isbn: '9780000000002', books: [perfectMatch], expectedConfidence: undefined },
         { name: 'audiobookcovers leaves results without a title unscored', provider: 'audiobookcovers', providerApi: bookFinder.audiobookCovers, method: 'search', ...query, books: [{ cover: 'https://example.com/cover.png' }], expectedConfidence: undefined },

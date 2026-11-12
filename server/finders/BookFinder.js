@@ -383,16 +383,17 @@ class BookFinder {
     title = title?.substring(0, MAX_INPUT_LENGTH) || title
     author = author?.substring(0, MAX_INPUT_LENGTH) || author
 
+    // Only Audible looks books up by ASIN
+    const isTitleAsin = provider.startsWith('audible') && isValidASIN(title?.toUpperCase())
+
     // Custom providers are assumed to be correct
     if (provider.startsWith('custom-')) {
       books = await this.getCustomProviderResults(title, author, isbn, provider)
-      if (title) this.setMatchConfidences(books, libraryItem, { title, author, isTitleAsin: isValidASIN(title.toUpperCase()) })
+      if (title) this.setMatchConfidences(books, libraryItem, { title, author, isTitleAsin })
       return books
     }
 
     if (!title) return books
-
-    const isTitleAsin = isValidASIN(title.toUpperCase())
 
     let actualTitleQuery = title
     let actualAuthorQuery = author
@@ -430,7 +431,8 @@ class BookFinder {
       }
     }
 
-    this.setMatchConfidences(books, libraryItem, { title: actualTitleQuery, author: actualAuthorQuery, isTitleAsin })
+    // The last fuzzy search drops the author, which must not count as a neutral author match
+    this.setMatchConfidences(books, libraryItem, { title: actualTitleQuery, author: actualAuthorQuery || author, isTitleAsin })
 
     const libraryItemDurationMinutes = getDurationMinutes(libraryItem)
     if (provider.startsWith('audible') && libraryItemDurationMinutes) {
@@ -568,7 +570,7 @@ class BookFinder {
     const W_AUTHOR = 0.1
 
     Logger.debug(`[BookFinder] Duration score: ${durationScore}, Title score: ${titleScore}, Author score: ${authorScore}`)
-    // Without a duration on both sides, title and author keep their relative weights and fill the whole 0-1 range
+    // If either side lacks a duration, title and author share the 0-1 range by weight
     const confidence = durationScore === null ? (W_TITLE * titleScore + W_AUTHOR * authorScore) / (W_TITLE + W_AUTHOR) : W_DURATION * durationScore + W_TITLE * titleScore + W_AUTHOR * authorScore
     Logger.debug(`[BookFinder] Confidence: ${confidence}`)
     return Math.max(0, Math.min(1, confidence))
