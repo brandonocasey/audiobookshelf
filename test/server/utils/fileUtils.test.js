@@ -135,6 +135,13 @@ describe('fileUtils', () => {
     })
   })
 
+  describe('sanitizeFilename', () => {
+    it('drops trailing dots and spaces, also after a long run of spaces inside the name', () => {
+      expect(fileUtils.sanitizeFilename('Book. . ')).to.equal('Book')
+      expect(fileUtils.sanitizeFilename(`A${' '.repeat(100000)}B.`)).to.equal('A B')
+    })
+  })
+
   describe('isPathTakenByOther', () => {
     const fsExtra = require('../../../server/libs/fsExtra')
     afterEach(() => sinon.restore())

@@ -1996,6 +1996,7 @@ describe('OrganizeManager', () => {
       const res = { statusCode: 200, body: undefined }
       res.status = (code) => ((res.statusCode = code), res)
       res.sendStatus = (code) => ((res.statusCode = code), res)
+      res.type = (contentType) => ((res.contentType = contentType), res)
       res.send = (body) => ((res.body = body), res)
       res.json = (body) => ((res.body = body), res)
       return res
@@ -2056,6 +2057,7 @@ describe('OrganizeManager', () => {
         await LibraryController.update.call({ organizeManager: { organizeLibrary: sinon.stub() } }, req, res)
         expect(res.statusCode, JSON.stringify(settings)).to.equal(400)
         expect(res.body).to.include('is invalid')
+        expect(res.contentType, 'the error quotes the template, so it MUST NOT be served as HTML').to.equal('text/plain')
       }
     })
 
@@ -2079,6 +2081,7 @@ describe('OrganizeManager', () => {
         await LibraryController.create.call({}, req, res)
         expect(res.statusCode, JSON.stringify(settings)).to.equal(400)
         expect(res.body).to.include('is invalid')
+        expect(res.contentType, 'the error quotes the template, so it MUST NOT be served as HTML').to.equal('text/plain')
       }
       expect(await Database.libraryModel.count()).to.equal(1)
     })

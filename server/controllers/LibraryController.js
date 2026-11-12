@@ -135,7 +135,7 @@ class LibraryController {
           } else {
             const settingError = getSettingValueError(key, req.body.settings[key], newLibraryPayload.settings[key])
             if (settingError) {
-              return res.status(400).send(`Invalid request. Setting "${key}" ${settingError}`)
+              return res.status(400).type('text/plain').send(`Invalid request. Setting "${key}" ${settingError}`)
             }
             newLibraryPayload.settings[key] = req.body.settings[key]
           }
@@ -393,7 +393,7 @@ class LibraryController {
           const settingError = getSettingValueError(key, req.body.settings[key], updatedSettings[key])
           if (settingError) {
             Logger.error(`[LibraryController] Invalid request. Setting "${key}" ${settingError}`)
-            return res.status(400).send(`Invalid request. Setting "${key}" ${settingError}`)
+            return res.status(400).type('text/plain').send(`Invalid request. Setting "${key}" ${settingError}`)
           }
           if (req.body.settings[key] !== updatedSettings[key]) {
             if (key === 'disableWatcher') hasUpdatedDisableWatcher = true

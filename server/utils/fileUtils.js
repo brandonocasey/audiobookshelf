@@ -443,6 +443,13 @@ module.exports.downloadImageFile = (url, filepath) => {
   return this.downloadFile(url, filepath, contentTypeFilter)
 }
 
+/** Same result as `.replace(/[. ]+$/, '')`, which takes quadratic time on long runs of spaces */
+function trimTrailingDotsAndSpaces(name) {
+  let end = name.length
+  while (end > 0 && (name[end - 1] === '.' || name[end - 1] === ' ')) end--
+  return name.slice(0, end)
+}
+
 module.exports.sanitizeFilename = (filename, colonReplacement = ' - ') => {
   if (typeof filename !== 'string') {
     return false
@@ -462,18 +469,17 @@ module.exports.sanitizeFilename = (filename, colonReplacement = ' - ') => {
   const controlRe = /[\x00-\x1f\x80-\x9f]/g
   const reservedRe = /^\.+$/
   const windowsReservedRe = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i
-  const windowsTrailingRe = /[\. ]+$/
   const lineBreaks = /[\n\r]/g
 
-  let sanitized = filename
-    .replace(':', colonReplacement) // Replace first occurrence of a colon
-    .replace(illegalRe, replacement)
-    .replace(controlRe, replacement)
-    .replace(reservedRe, replacement)
-    .replace(lineBreaks, replacement)
-    .replace(windowsReservedRe, replacement)
-    .replace(windowsTrailingRe, replacement)
-    .replace(/\s+/g, ' ') // Replace consecutive spaces with a single space
+  let sanitized = trimTrailingDotsAndSpaces(
+    filename
+      .replace(':', colonReplacement) // Replace first occurrence of a colon
+      .replace(illegalRe, replacement)
+      .replace(controlRe, replacement)
+      .replace(reservedRe, replacement)
+      .replace(lineBreaks, replacement)
+      .replace(windowsReservedRe, replacement)
+  ).replace(/\s+/g, ' ') // Replace consecutive spaces with a single space
 
   // Check if basename is too many bytes
   const ext = Path.extname(sanitized) // separate out file extension

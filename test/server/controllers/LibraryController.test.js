@@ -202,6 +202,7 @@ describe('LibraryController.update auto match settings', () => {
       res.statusCode = code
       return res
     }
+    res.type = () => res
     res.send = (body) => {
       res.body = body
       return res
@@ -260,6 +261,7 @@ describe('LibraryController.create auto match settings', () => {
       res.statusCode = code
       return res
     }
+    res.type = () => res
     res.send = (body) => {
       res.body = body
       return res
