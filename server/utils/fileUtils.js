@@ -97,8 +97,8 @@ async function getPathIdentity(path) {
 module.exports.getPathIdentity = getPathIdentity
 
 /**
- * Whether both paths are one file, such as names differing only in letter case.
- * A zero device or inode number means the file system does not report one. Such files never count as the same.
+ * Whether both paths are one file, such as names that differ only in case.
+ * A zero device or inode number means none is reported, so those files never match.
  *
  * @param {string} pathA
  * @param {string} pathB

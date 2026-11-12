@@ -36,6 +36,9 @@ class LibraryItemScanData {
     /** @type {import('../objects/files/LibraryFile')[]} */
     this.libraryFiles = data.libraryFiles
 
+    /** @type {boolean} Set by the caller. A rescan then leaves the book's metadata as it is in the database */
+    this.keepMetadata = false
+
     // Set after check
     /** @type {boolean} */
     this.hasChanges

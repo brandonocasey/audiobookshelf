@@ -50,8 +50,8 @@ function getTemplateMetadata(media) {
 }
 
 /**
- * Playable audio files in playback order, then the ebook, with their file template values.
- * Excluded audio files keep their names. The only file of a single-file item moves with the item.
+ * Playable audio files in play order, then the ebook, with their file template values.
+ * Excluded audio files keep their names.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
  * @returns {{path:string, filename:string, ext:string, fileValues:{track?:string, disc?:string}}[]}
@@ -238,6 +238,31 @@ async function isInsideAnotherItem(libraryFolderPath, path, libraryItemPaths) {
 }
 
 /**
+ * Whether a library item has exactly the path, even when it is missing from disk.
+ * Callers MUST only pass a target path that differs from the path of the item being organized.
+ *
+ * @param {string} path
+ * @param {Set<string>|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
+ * @returns {Promise<boolean>}
+ */
+async function isPathOfLibraryItem(path, libraryItemPaths) {
+  if (!libraryItemPaths) return !!(await Database.libraryItemModel.findOne({ where: { path }, attributes: ['id'] }))
+  return libraryItemPaths.has(path)
+}
+
+/**
+ * @param {string} libraryFolderPath
+ * @param {string} toPath A target path that differs from the path of the item being organized
+ * @param {Set<string>|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
+ * @returns {Promise<'targetInsideItem'|'targetExists'|null>} Skip reason for a target that another library item holds
+ */
+async function getTargetItemReason(libraryFolderPath, toPath, libraryItemPaths) {
+  if (await isInsideAnotherItem(libraryFolderPath, toPath, libraryItemPaths)) return 'targetInsideItem'
+  if (await isPathOfLibraryItem(toPath, libraryItemPaths)) return 'targetExists'
+  return null
+}
+
+/**
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {import('../models/Library')} library Library with folders
  * @returns {string}
@@ -256,17 +281,16 @@ function isFolderChanged(libraryItem, plan) {
 }
 
 /**
- * Whether the plan puts the item inside another library item's folder. Checked against the database now.
- * A plan made from a list of item paths can go stale. Items added since are not in it.
+ * Like the target check of buildPlan, but against the database. A list of item paths can miss new items.
  *
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {import('../models/Library')} library Library with folders
  * @param {OrganizePlan} plan
- * @returns {Promise<boolean>}
+ * @returns {Promise<'targetInsideItem'|'targetExists'|null>}
  */
-async function isPlanInsideAnotherItem(libraryItem, library, plan) {
-  if (!isFolderChanged(libraryItem, plan)) return false
-  return isInsideAnotherItem(getLibraryFolderPath(libraryItem, library), plan.toPath, null)
+async function getPlanTargetItemReason(libraryItem, library, plan) {
+  if (!isFolderChanged(libraryItem, plan)) return null
+  return getTargetItemReason(getLibraryFolderPath(libraryItem, library), plan.toPath, null)
 }
 
 /**
@@ -280,7 +304,8 @@ async function getConflictReason(libraryItem, plan, fileMoves, { libraryFolderPa
   const hasFolderChange = isFolderChanged(libraryItem, plan)
   const isNested = isSameOrSubPath(plan.fromPath, plan.toPath) || isSameOrSubPath(plan.toPath, plan.fromPath)
   if (hasFolderChange && !libraryItem.isFile && isNested) return 'targetNested'
-  if (hasFolderChange && (await isInsideAnotherItem(libraryFolderPath, plan.toPath, libraryItemPaths))) return 'targetInsideItem'
+  const targetItemReason = hasFolderChange ? await getTargetItemReason(libraryFolderPath, plan.toPath, libraryItemPaths) : null
+  if (targetItemReason) return targetItemReason
 
   // Anything at the target blocks a single-file item, including itself
   if (hasFolderChange && (await isPathTakenByOther(libraryItem.isFile ? null : plan.fromPath, plan.toPath))) return 'targetExists'
@@ -369,4 +394,4 @@ function planToClientJSON(plan) {
   return { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
 }
 
-module.exports = { buildPlan, isPlanInsideAnotherItem, getMovedPath, getRenderedTargetKey, planToClientJSON }
+module.exports = { buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON }

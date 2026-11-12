@@ -10,7 +10,7 @@ const LibraryScanner = require('../scanner/LibraryScanner')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const { ScanResult } = require('../utils/constants')
 const { filePathToPOSIX, getPathsBelowLibraryFolder, getPathIdentity, isSameFile, isPathTakenByOther, removeTreeWithReadOnlyFolders } = require('../utils/fileUtils')
-const { buildPlan, isPlanInsideAnotherItem, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
+const { buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
 const { captureMediaChoices, restoreMediaChoices } = require('../utils/organizeMediaChoices')
 const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
 
@@ -246,7 +246,8 @@ class OrganizeManager {
     if (!plan.changed) return { itemId: libraryItemId, status: 'unchanged' }
     if (expectedHash && expectedHash !== plan.hash) return { itemId: libraryItemId, status: 'skipped', reason: 'planChanged' }
     // Planning uses item paths loaded once per run. Only this lookup sees an item added since.
-    if (await isPlanInsideAnotherItem(libraryItem, library, plan)) return { itemId: libraryItemId, status: 'skipped', reason: 'targetInsideItem' }
+    const targetItemReason = await getPlanTargetItemReason(libraryItem, library, plan)
+    if (targetItemReason) return { itemId: libraryItemId, status: 'skipped', reason: targetItemReason }
 
     await this.executePlan(libraryItem, library, plan)
     await this.recordMovedItemPath(libraryItem.libraryId, plan.fromPath, plan.toPath)
@@ -309,21 +310,24 @@ class OrganizeManager {
   }
 
   /**
-   * Start a background task for the edited items whose target changed
+   * Start a background task for the edited items whose target changed.
+   * Scans wait from the first call on, not only once the task has started.
    *
    * @param {Map<string, string|null>} targetsBefore Library item id to getAutoOrganizeTarget from before the edit
    * @returns {Promise<void>}
    */
-  async autoOrganizeItemsInBackground(targetsBefore) {
-    try {
-      const libraryItemIds = []
-      for (const [libraryItemId, targetBefore] of targetsBefore) {
-        if (await this.hasTargetChanged(libraryItemId, targetBefore)) libraryItemIds.push(libraryItemId)
+  autoOrganizeItemsInBackground(targetsBefore) {
+    return LibraryScanner.trackOrganizeRun(this.getLibraryIdsOfItems([...targetsBefore.keys()]), async () => {
+      try {
+        const libraryItemIds = []
+        for (const [libraryItemId, targetBefore] of targetsBefore) {
+          if (await this.hasTargetChanged(libraryItemId, targetBefore)) libraryItemIds.push(libraryItemId)
+        }
+        if (libraryItemIds.length) this.startTask(libraryItemIds)
+      } catch (error) {
+        Logger.error('[OrganizeManager] Failed to start auto organize of edited items', error)
       }
-      if (libraryItemIds.length) this.startTask(libraryItemIds)
-    } catch (error) {
-      Logger.error('[OrganizeManager] Failed to start auto organize of edited items', error)
-    }
+    })
   }
 
   /**
@@ -381,9 +385,12 @@ class OrganizeManager {
    * @param {Object<string,string>|null} planHashes
    */
   runTask(task, libraryItemIds, planHashes) {
-    return this.withSharedItemPaths(async () => {
-      const libraryIds = await this.getLibraryIdsOfItems(libraryItemIds)
-      return LibraryScanner.trackOrganizeRun(libraryIds, () => this.organizeTaskItems(task, libraryItemIds, planHashes))
+    return this.withSharedItemPaths(() => {
+      const libraryIds = this.getLibraryIdsOfItems(libraryItemIds)
+      return LibraryScanner.trackOrganizeRun(libraryIds, async () => {
+        await libraryIds
+        return this.organizeTaskItems(task, libraryItemIds, planHashes)
+      })
     })
   }
 
@@ -574,14 +581,14 @@ class OrganizeManager {
   }
 
   /**
-   * Rescan keeps the library item row and refreshes its paths, files and cover.
-   * The scan resets track and ebook settings that depend on the files. They are put back after it.
+   * Rescan keeps the item row and its metadata, and refreshes its paths, files and cover.
+   * It resets track and ebook settings, so they are put back afterwards.
    *
    * @param {OrganizeJournal} journal
    * @param {{path:string, relPath:string, isFile:boolean, moves:OrganizeStep[]}} location Where the item is now, and the moves that took its files there
    */
   async rescanItem(journal, { path, relPath, isFile, moves }) {
-    const scanResult = await LibraryItemScanner.scanLibraryItem(journal.libraryItemId, { path, relPath, libraryFolderId: journal.libraryFolderId, isFile })
+    const scanResult = await LibraryItemScanner.scanLibraryItem(journal.libraryItemId, { path, relPath, libraryFolderId: journal.libraryFolderId, isFile, keepMetadata: true })
     if (scanResult === ScanResult.NOTHING) {
       throw new Error(`Rescan of library item "${journal.libraryItemId}" at "${path}" found nothing to update`)
     }

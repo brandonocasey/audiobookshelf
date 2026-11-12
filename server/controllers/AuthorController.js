@@ -109,7 +109,6 @@ class AuthorController {
     let hasUpdated = false
 
     const authorNameUpdate = payload.name !== undefined && payload.name !== req.author.name
-    // Books of the author with where the templates put them now, loaded before the rename changes their names
     let allItemsWithAuthor = []
     let organizeTargetsBefore = new Map()
     if (authorNameUpdate) {

@@ -12,6 +12,7 @@ const Logger = require('../../../server/Logger')
 const Watcher = require('../../../server/Watcher')
 const SocketAuthority = require('../../../server/SocketAuthority')
 const prober = require('../../../server/utils/prober')
+const libraryFilters = require('../../../server/utils/queries/libraryFilters')
 const fsExtra = require('../../../server/libs/fsExtra')
 const AudioMetaTags = require('../../../server/objects/metadata/AudioMetaTags')
 const LibraryItemScanner = require('../../../server/scanner/LibraryItemScanner')
@@ -137,8 +138,8 @@ describe('OrganizeManager', () => {
   }
 
   /**
-   * Three tracks: Part 1 is excluded, and Part 3 plays before Part 2. The primary ebook is a PDF with a
-   * supplementary EPUB. The cover is one the scanner would not pick. Progress is inside Part 2.
+   * Part 1 is excluded and Part 3 plays before Part 2.
+   * It also has a PDF ebook, an EPUB, a chosen cover and progress in Part 2.
    */
   async function addBookWithChoices() {
     const libraryItemId = await addBook('Raw', ['Part 1.mp3', 'Part 2.mp3', 'Part 3.mp3', 'book.pdf', 'extra.epub', 'a.jpg', 'b.jpg'], { title: 'Book', authors: ['Writer'] })
@@ -493,7 +494,34 @@ describe('OrganizeManager', () => {
     })
   })
 
+  describe('metadata of the book', () => {
+    it('is kept when the files disagree with it', async () => {
+      const libraryItemId = await addBook('Raw', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
+      fs.writeFileSync(rel('Raw', 'metadata.json'), JSON.stringify({ title: 'Stale Title', authors: ['Stale Author'], narrators: ['Stale Narrator'] }))
+
+      expect(await manager.organizeItem(libraryItemId)).to.deep.equal({ itemId: libraryItemId, status: 'moved' })
+
+      const { media, path: itemPath } = await loadItem(libraryItemId)
+      expect(itemPath).to.equal(rel('Writer', 'Book'))
+      expect([media.title, media.authors.map((author) => author.name), media.narrators]).to.deep.equal(['Book', ['Writer'], []])
+    })
+  })
+
   describe('skipping and failing', () => {
+    it('skips an item whose target is the path of a missing item', async () => {
+      const missingId = await addBook('Writer/Book', ['Book.m4b'], { title: 'Missing', authors: ['Writer'] })
+      fs.rmSync(rel('Writer'), { recursive: true })
+      await Database.libraryItemModel.update({ isMissing: true }, { where: { id: missingId } })
+      const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+
+      const preview = await manager.previewItems([libraryItemId])
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(preview.plans.map((plan) => plan.skipReason)).to.deep.equal(['targetExists'])
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'skipped', reason: 'targetExists' })
+      expect((await loadItem(libraryItemId)).path).to.equal(rel('Raw'))
+    })
+
     it('skips an item whose target folder already exists and moves nothing', async () => {
       const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
       fs.mkdirSync(rel('Writer', 'Book'), { recursive: true })
@@ -1128,6 +1156,19 @@ describe('OrganizeManager', () => {
       expect(res.json.firstCall.args[0].libraryItem.path).to.equal(rel('Writer', 'Book Two'))
     })
 
+    it('keeps the edited metadata when the folder metadata.json is stale', async () => {
+      await library.update({ settings: { ...library.settings, autoOrganize: true } })
+      const libraryItemId = await addBook('Writer/Book', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
+      fs.copyFileSync(path.join(global.MetadataPath, 'items', libraryItemId, 'metadata.json'), rel('Writer', 'Book', 'metadata.json'))
+      const req = { body: { metadata: { title: 'Book Two' } }, libraryItem: await loadItem(libraryItemId) }
+
+      await LibraryItemController.updateMedia.call({ organizeManager: manager }, req, { json: sinon.spy() })
+
+      const { media, path: itemPath } = await loadItem(libraryItemId)
+      expect(itemPath).to.equal(rel('Writer', 'Book Two'))
+      expect([media.title, media.authors.map((author) => author.name)]).to.deep.equal(['Book Two', ['Writer']])
+    })
+
     it('runs a batch edit in a background task after the response', async () => {
       await library.update({ settings: { ...library.settings, autoOrganize: true } })
       const libraryItemId = await addBook('Writer/Book', ['Book.m4b'], { title: 'Book', authors: ['Writer'] })
@@ -1271,8 +1312,19 @@ describe('OrganizeManager', () => {
       if (runTask.called) await runTask.firstCall.returnValue
     }
 
+    /** A folder metadata.json from before the edit. The scanner reads it ahead of the server's copy. */
+    async function leaveStaleFolderMetadata(libraryItemId) {
+      const libraryItem = await loadItem(libraryItemId)
+      fs.copyFileSync(path.join(global.MetadataPath, 'items', libraryItemId, 'metadata.json'), path.join(libraryItem.path, 'metadata.json'))
+    }
+
+    async function getAuthorNames(libraryItemId) {
+      return (await loadItem(libraryItemId)).media.authors.map((author) => author.name)
+    }
+
     function renameAuthor(authorName, newName) {
       return runEditAndWaitForOrganize(async () => {
+        await libraryFilters.getFilterData('book', library.id) // A running server has it cached by now
         const author = await Database.authorModel.findOne({ where: { name: authorName, libraryId: library.id } })
         await AuthorController.update.call({ organizeManager: manager }, { body: { name: newName }, author }, makeRes())
       })
@@ -1280,6 +1332,7 @@ describe('OrganizeManager', () => {
 
     function renameSeries(seriesName, newName) {
       return runEditAndWaitForOrganize(async () => {
+        await libraryFilters.getFilterData('book', library.id)
         const series = await Database.seriesModel.findOne({ where: { name: seriesName, libraryId: library.id } })
         await SeriesController.update.call({ organizeManager: manager }, { body: { name: newName }, series }, makeRes())
       })
@@ -1300,6 +1353,17 @@ describe('OrganizeManager', () => {
         expect(fs.existsSync(rel('Old'))).to.be.false
         expect((await loadItem(first)).path).to.equal(rel('New', 'First'))
         expect((await loadItem(second)).path).to.equal(rel('New', 'Second'))
+      })
+
+      it('keeps the renamed author on a book whose folder metadata.json names the old one', async () => {
+        await enableAutoOrganize()
+        const libraryItemId = await addBook('Raw First', ['First.m4b'], { title: 'First', authors: ['Old'] })
+        await leaveStaleFolderMetadata(libraryItemId)
+
+        await renameAuthor('Old', 'New')
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('New', 'First'))
+        expect(await getAuthorNames(libraryItemId)).to.deep.equal(['New'])
       })
 
       it('leaves books alone when their library has auto organize off', async () => {
@@ -1358,6 +1422,19 @@ describe('OrganizeManager', () => {
         expect((await loadItem(untouched)).path).to.equal(rel('Raw Second'))
       })
 
+      it('keeps the merged author on a book whose folder metadata.json names the old one', async () => {
+        await enableAutoOrganize()
+        const merged = await addBook('Raw First', ['First.m4b'], { title: 'First', authors: ['Old'] })
+        await addBook('Raw Second', ['Second.m4b'], { title: 'Second', authors: ['Writer'] })
+        await leaveStaleFolderMetadata(merged)
+
+        await renameAuthor('Old', 'Writer')
+
+        expect((await loadItem(merged)).path).to.equal(rel('Writer', 'First'))
+        expect(await getAuthorNames(merged)).to.deep.equal(['Writer'])
+        expect(await Database.authorModel.findOne({ where: { name: 'Old' } })).to.be.null
+      })
+
       it('does not move a merged book when its library has auto organize off', async () => {
         await addBook('Raw First', ['First.m4b'], { title: 'First', authors: ['Old'] })
         await addBook('Raw Second', ['Second.m4b'], { title: 'Second', authors: ['Writer'] })
@@ -1386,6 +1463,18 @@ describe('OrganizeManager', () => {
         expect(fs.existsSync(rel('Writer', 'Old Saga'))).to.be.false
         const seriesNames = (await loadItem(first)).media.series.map((series) => series.name)
         expect(seriesNames).to.deep.equal(['New Saga'])
+      })
+
+      it('keeps the renamed series on a book whose folder metadata.json names the old one', async () => {
+        await enableAutoOrganize()
+        const libraryItemId = await addBook('Raw First', ['First.m4b'], { title: 'First', authors: ['Writer'], series: 'Old Saga', sequence: '1' })
+        await leaveStaleFolderMetadata(libraryItemId)
+
+        await renameSeries('Old Saga', 'New Saga')
+
+        expect((await loadItem(libraryItemId)).path).to.equal(rel('Writer', 'New Saga', '1. First'))
+        const bookSeries = (await loadItem(libraryItemId)).media.series.map((series) => [series.name, series.bookSeries.sequence])
+        expect(bookSeries).to.deep.equal([['New Saga', '1']])
       })
 
       it('moves nothing when the templates do not use the series', async () => {
@@ -1436,7 +1525,9 @@ describe('OrganizeManager', () => {
       const originalTrack = LibraryScanner.trackOrganizeRun.bind(LibraryScanner)
       sinon.stub(LibraryScanner, 'trackOrganizeRun').callsFake((libraryIds, run) => {
         const result = originalTrack(libraryIds, run)
-        if (LibraryScanner.organizeRunsByLibraryId.get(libraryId)?.size >= count) tracked.resolve()
+        Promise.all(LibraryScanner.organizeRunLookups).then(() => {
+          if (LibraryScanner.organizeRunsByLibraryId.get(libraryId)?.size >= count) tracked.resolve()
+        })
         return result
       })
       return tracked.promise
@@ -1505,7 +1596,7 @@ describe('OrganizeManager', () => {
       expect(Logger.info.getCalls().some((call) => /Waiting for organize to finish before the library scan/.test(call.args[0]))).to.be.true
     })
 
-    /** Resolves when the nth task has started its items, which is after the scanner has recorded the run */
+    /** Resolves when the nth task has started its items */
     function whenTaskStarted(taskNumber) {
       const started = deferred()
       const organizeTaskItems = manager.organizeTaskItems.bind(manager)
@@ -1678,6 +1769,83 @@ describe('OrganizeManager', () => {
       await runTask.firstCall.returnValue
 
       expect(wasOrganizeActiveWhenScanned).to.be.false
+    })
+
+    describe('watcher batches', () => {
+      function watcherBatch(batchLibrary, folder) {
+        const fileUpdates = [{ libraryId: batchLibrary.id, folderId: folder.id, path: rel('Raw New', 'New.m4b'), relPath: 'Raw New/New.m4b', type: 'added' }]
+        const pendingTask = new Task()
+        pendingTask.setData('watcher-scan', { text: 'Scanning', key: 'MessageTaskScanningFileChanges' }, null, false, {})
+        return [fileUpdates, pendingTask]
+      }
+
+      afterEach(() => {
+        LibraryScanner.scanningFilesChanged = false
+        LibraryScanner.pendingFileUpdatesToScan = []
+        LibraryScanner.librariesWatcherScanning.clear()
+      })
+
+      it('scans another library while a batch of the organizing library waits', async () => {
+        const otherLibrary = await addOtherLibrary()
+        const libraryItemId = await addUnorganizedBook('Book')
+        const [hold] = holdExecutePlan(1)
+        const scanFolderUpdates = sinon.stub(LibraryScanner, 'scanFolderUpdates').resolves({})
+        const runTask = sinon.spy(manager, 'runTask')
+        manager.startTask([libraryItemId])
+        await hold.entered.promise
+
+        const waitingBatch = LibraryScanner.scanFilesChanged(...watcherBatch(library, libraryFolder))
+        await LibraryScanner.scanFilesChanged(...watcherBatch(otherLibrary, otherLibrary.libraryFolders[0]))
+
+        expect(scanFolderUpdates.getCalls().map((call) => call.args[0].id)).to.deep.equal([otherLibrary.id])
+        hold.release.resolve()
+        await waitingBatch
+        await runTask.firstCall.returnValue
+        expect(scanFolderUpdates.getCalls().map((call) => call.args[0].id)).to.deep.equal([otherLibrary.id, library.id])
+      })
+
+      it('skips organizing items of a library while its batch is scanned, and no other library', async () => {
+        const otherLibrary = await addOtherLibrary()
+        const libraryItemId = await addUnorganizedBook('Book')
+        const scanStarted = deferred()
+        const scanRelease = deferred()
+        sinon.stub(LibraryScanner, 'scanFolderUpdates').callsFake(async () => {
+          scanStarted.resolve()
+          await scanRelease.promise
+          return {}
+        })
+
+        const scan = LibraryScanner.scanFilesChanged(...watcherBatch(library, libraryFolder))
+        await scanStarted.promise
+
+        expect(manager.getBusyReason(await loadItem(libraryItemId))).to.equal('libraryScanning')
+        expect(manager.getBusyReason({ id: 'other', libraryId: otherLibrary.id })).to.be.null
+        scanRelease.resolve()
+        await scan
+        expect(manager.getBusyReason(await loadItem(libraryItemId))).to.be.null
+      })
+    })
+
+    it('waits for the task of an author rename that a scan is requested right after', async () => {
+      await library.update({ settings: { ...library.settings, autoOrganize: true } })
+      await addUnorganizedBook('Book')
+      const [hold] = holdExecutePlan(1)
+      let wasMovedWhenScanned = null
+      scanLibrary.callsFake(async () => {
+        wasMovedWhenScanned = fs.existsSync(rel('Newer', 'Book', 'Book.m4b'))
+        return false
+      })
+      const author = await Database.authorModel.findOne({ where: { name: 'Writer' } })
+
+      await AuthorController.update.call({ organizeManager: manager }, { body: { name: 'Newer' }, author }, { json: sinon.spy() })
+      const scan = LibraryScanner.scan(library)
+      await hold.entered.promise
+      await flush()
+      expect(scanLibrary.called).to.be.false
+      hold.release.resolve()
+      await scan
+
+      expect(wasMovedWhenScanned).to.be.true
     })
   })
 

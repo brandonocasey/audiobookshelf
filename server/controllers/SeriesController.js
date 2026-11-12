@@ -91,7 +91,7 @@ class SeriesController {
     }
 
     if (isRename) {
-      // The scanner reads this file first, so a stale series name here would come back when the books are rescanned
+      // Keep metadata.json in step, since a later scan reads it
       const renamedLibraryItems = await Database.seriesModel.getAllLibraryItemsForSeries(req.series.id)
       for (const libraryItem of renamedLibraryItems) {
         await libraryItem.saveMetadataFile()

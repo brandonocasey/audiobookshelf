@@ -23,7 +23,7 @@ class LibraryItemScanner {
    * Scan single library item
    *
    * @param {string} libraryItemId
-   * @param {{relPath:string, path:string, libraryFolderId?:string, isFile?:boolean}} [updateLibraryItemDetails] used when the item folder was renamed or moved
+   * @param {{relPath:string, path:string, libraryFolderId?:string, isFile?:boolean, keepMetadata?:boolean}} [updateLibraryItemDetails] used when the item folder was renamed or moved. keepMetadata leaves the book's metadata as it is in the database
    * @returns {Promise<number>} ScanResult
    */
   async scanLibraryItem(libraryItemId, updateLibraryItemDetails = null) {
@@ -59,6 +59,8 @@ class LibraryItemScanner {
     const libraryItemPath = updateLibraryItemDetails?.path || fileUtils.filePathToPOSIX(libraryItem.path)
     const folder = library.libraryFolders[0]
     const libraryItemScanData = await this.getLibraryItemScanData(libraryItemPath, library, folder, updateLibraryItemDetails?.isFile || false)
+
+    libraryItemScanData.keepMetadata = !!updateLibraryItemDetails?.keepMetadata
 
     let libraryItemDataUpdated = await libraryItemScanData.checkLibraryItemData(libraryItem, scanLogger)
 
