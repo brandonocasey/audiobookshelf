@@ -51,7 +51,7 @@ function getTemplateMetadata(media) {
 
 /**
  * Playable audio files in playback order, then the ebook, with their file template values.
- * Excluded audio files keep their names, except the only file of a single-file item, which moves with the item.
+ * Excluded audio files keep their names. The only file of a single-file item moves with the item.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
  * @returns {{path:string, filename:string, ext:string, fileValues:{track?:string, disc?:string}}[]}
@@ -94,7 +94,7 @@ function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplat
 }
 
 /**
- * Comparable value for where the templates put the book, to tell whether an edit moved the target.
+ * Comparable value for where the templates put the book. Tells whether an edit moved the target.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item with authors and series loaded
  * @param {import('../models/Library').LibrarySettingsObject} librarySettings
@@ -256,8 +256,8 @@ function isFolderChanged(libraryItem, plan) {
 }
 
 /**
- * Whether the plan puts the item inside the folder of another library item, looked up in the database now.
- * A plan made from a list of item paths can be out of date when items were added since.
+ * Whether the plan puts the item inside another library item's folder. Checked against the database now.
+ * A plan made from a list of item paths can go stale. Items added since are not in it.
  *
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {import('../models/Library')} library Library with folders

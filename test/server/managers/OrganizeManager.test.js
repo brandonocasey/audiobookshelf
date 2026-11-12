@@ -133,8 +133,8 @@ describe('OrganizeManager', () => {
   }
 
   /**
-   * A book with three tracks where Part 1 is excluded and Part 3 plays before Part 2, a PDF as primary ebook
-   * next to a supplementary EPUB, a cover the scanner would not pick, and progress inside Part 2
+   * Three tracks: Part 1 is excluded, and Part 3 plays before Part 2. The primary ebook is a PDF with a
+   * supplementary EPUB. The cover is one the scanner would not pick. Progress is inside Part 2.
    */
   async function addBookWithChoices() {
     const libraryItemId = await addBook('Raw', ['Part 1.mp3', 'Part 2.mp3', 'Part 3.mp3', 'book.pdf', 'extra.epub', 'a.jpg', 'b.jpg'], { title: 'Book', authors: ['Writer'] })
@@ -150,7 +150,7 @@ describe('OrganizeManager', () => {
     return libraryItemId
   }
 
-  /** What the book holds, by the content that each file name stands for (every file contains its original name) */
+  /** What the book holds, by the content each file name stands for. Every file contains its original name. */
   async function describeChoices(libraryItemId) {
     const { media, libraryFiles } = await loadItem(libraryItemId)
     const contentOf = (filePath) => fs.readFileSync(filePath, 'utf8')

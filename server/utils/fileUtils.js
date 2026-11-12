@@ -59,7 +59,7 @@ function getPathsBelowLibraryFolder(libraryFolderPath, path) {
 module.exports.getPathsBelowLibraryFolder = getPathsBelowLibraryFolder
 
 /**
- * Remove a file or folder tree, also when it holds read-only folders such as a copy of one.
+ * Remove a file or folder tree, including read-only folders such as a copy of one.
  * Symlinks are not followed.
  *
  * @param {string} path
@@ -98,7 +98,7 @@ module.exports.getPathIdentity = getPathIdentity
 
 /**
  * Whether both paths are one file, such as names differing only in letter case.
- * A zero dev or ino means the file system does not report one, so the files never count as the same.
+ * A zero device or inode number means the file system does not report one. Such files never count as the same.
  *
  * @param {string} pathA
  * @param {string} pathB

@@ -108,7 +108,7 @@ export default {
         series: ''
       },
       error: '',
-      // Folder the server saves the upload in, rendered from the library's organize template
+      // Folder the server saves the upload in. Books use the library's organize template; podcasts use the title.
       directory: '',
       directoryError: '',
       directoryTimeout: null,

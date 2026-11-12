@@ -61,7 +61,7 @@ class OrganizeManager {
     this.abMergeManager = abMergeManager
     /** @type {Set<string>} */
     this.itemIdsInProgress = new Set()
-    /** Organizing runs one item at a time so two runs cannot both pass the target check and move onto the same path */
+    /** Organizing runs one item at a time. Two runs cannot both pass the target check and move onto one path. */
     this.executionQueue = Promise.resolve()
     /** @type {Map<string, Promise<Set<string>>>} Item paths per library, kept while a preview or run is active */
     this.itemPathsByLibraryId = new Map()
@@ -89,13 +89,13 @@ class OrganizeManager {
   getBusyReason(libraryItem) {
     if (LibraryScanner.isLibraryFileScanning(libraryItem.libraryId)) return 'libraryScanning'
     if (this.playbackSessionManager.sessions.some((session) => session.libraryItemId === libraryItem.id)) return 'streaming'
-    // Embedding metadata and merging to m4b write temp files beside the audio and copy the result back to the old path
+    // Embedding metadata and merging to m4b write temp files beside the audio. They copy the result back to the old path.
     if (this.audioMetadataManager.getIsLibraryItemQueuedOrProcessing(libraryItem.id) || this.abMergeManager.getPendingTaskByLibraryItemId(libraryItem.id)) return 'toolRunning'
     return null
   }
 
   /**
-   * Run a preview or a run with the item paths of each library loaded once and kept current
+   * Preview and run load each library's item paths once and update them for moved items
    *
    * @template T
    * @param {() => Promise<T>} run
@@ -234,7 +234,7 @@ class OrganizeManager {
     if (plan.skipReason) return { itemId: libraryItemId, status: 'skipped', reason: plan.skipReason }
     if (!plan.changed) return { itemId: libraryItemId, status: 'unchanged' }
     if (expectedHash && expectedHash !== plan.hash) return { itemId: libraryItemId, status: 'skipped', reason: 'planChanged' }
-    // The planning item paths are loaded once per run, so an item added since is only seen by this lookup
+    // Planning uses item paths loaded once per run. Only this lookup sees an item added since.
     if (await isPlanInsideAnotherItem(libraryItem, library, plan)) return { itemId: libraryItemId, status: 'skipped', reason: 'targetInsideItem' }
 
     await this.executePlan(libraryItem, library, plan)
@@ -243,7 +243,7 @@ class OrganizeManager {
   }
 
   /**
-   * Where the library's templates put the book, taken before an edit to tell whether the edit moved it.
+   * Where the library's templates put the book. Taken before an edit to tell whether the edit moved it.
    *
    * @param {import('../models/LibraryItem')} libraryItem Expanded library item
    * @returns {Promise<string|null>} Null when the item is not a book or its library has auto organize off
@@ -269,7 +269,7 @@ class OrganizeManager {
   }
 
   /**
-   * Organize the item when its library has auto organize on and the edit changed where the templates put it
+   * Organize the item when its library has auto organize on. Only when the edit changed its target.
    *
    * @param {string} libraryItemId
    * @param {string|null} targetBefore From getAutoOrganizeTarget before the edit
@@ -286,7 +286,7 @@ class OrganizeManager {
   }
 
   /**
-   * Start a background task for the edited items whose edit changed where the templates put them
+   * Start a background task for the edited items whose target changed
    *
    * @param {Map<string, string|null>} targetsBefore Library item id to getAutoOrganizeTarget from before the edit
    * @returns {Promise<void>}
@@ -536,7 +536,7 @@ class OrganizeManager {
 
   /**
    * Rescan keeps the library item row and refreshes its paths, files and cover.
-   * The scan resets track and ebook settings that depend on the files, so they are put back after it.
+   * The scan resets track and ebook settings that depend on the files. They are put back after it.
    *
    * @param {OrganizeJournal} journal
    * @param {{path:string, relPath:string, isFile:boolean, moves:OrganizeStep[]}} location Where the item is now, and the moves that took its files there

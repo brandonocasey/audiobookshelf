@@ -3,7 +3,7 @@ const Database = require('../Database')
 const { getMovedPath } = require('./organizePlan')
 
 /**
- * Settings of a book that a rescan of moved files resets: the scan takes them from the files, not from the book.
+ * Book settings that a rescan of moved files resets. The scan reads them from the files, not from the book.
  *
  * @typedef MediaChoices
  * @property {{path:string, exclude:boolean, index:number, manuallyVerified:boolean}[]} audioFiles
@@ -67,8 +67,7 @@ async function restorePrimaryEbook(libraryItem, savedEbookPath, moves) {
 }
 
 /**
- * Put the settings captured before the moves back on the book after the rescan. Files are matched by where the moves took them.
- * Files the capture does not know keep what the scan found.
+ * Put the captured settings back after the rescan, matched by moved path. Files not captured keep what the scan found.
  *
  * @param {string} libraryItemId
  * @param {MediaChoices} choices

@@ -8,7 +8,7 @@ const { getUploadLayout } = require('./organizeTemplate')
  * @typedef UploadTarget
  * @property {string} directory Folder below the library folder, "/" separated. Empty when the details produce no folder name
  * @property {string} path Absolute folder path
- * @property {Map<string,string>} newNames Uploaded file name to the name it is saved under, only for renamed files
+ * @property {Map<string,string>} newNames Uploaded file name to the name it is saved under, for each audio file and a lone ebook. Empty when new names collide.
  * @property {boolean} exists The folder exists or lies inside a library item's folder
  * @property {string} [libraryItemTitle] Title of the library item that contains the folder
  */

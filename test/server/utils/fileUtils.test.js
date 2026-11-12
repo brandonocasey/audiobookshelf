@@ -139,7 +139,7 @@ describe('fileUtils', () => {
     const fsExtra = require('../../../server/libs/fsExtra')
     afterEach(() => sinon.restore())
 
-    // Number stats lose inode precision above 2^53, so the stub returns Numbers unless bigint is asked for
+    // Number stats lose inode precision above 2^53. The stub returns Numbers unless bigint is asked for.
     function stubIdentities(identities) {
       sinon.stub(fsExtra, 'lstat').callsFake(async (path, options) => {
         const { dev, ino } = identities[path]
