@@ -211,7 +211,7 @@ describe('LibraryController.update auto match settings', () => {
       return res
     }
     const req = { user: { isAdminOrUp: true }, library, body: { settings: { [key]: value } } }
-    await LibraryController.update.call({}, req, res)
+    await LibraryController.update.call({ organizeManager: { organizeLibraryIfTemplatesChanged: sinon.stub() } }, req, res)
     return res
   }
 
