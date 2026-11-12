@@ -86,7 +86,7 @@ components:
           type: string
           example: '{title}< - Part {track}>'
         autoOrganize:
-          description: Book libraries only. Whether to organize books after edits, matches, author renames or merges, and series renames, and every book after a template change.
+          description: Book libraries only. Whether to organize books after edits, matches, author renames or merges, and series renames. Template changes organize every book.
           type: boolean
           example: false
         podcastSearchRegion:

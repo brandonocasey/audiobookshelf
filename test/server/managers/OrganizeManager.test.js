@@ -2558,6 +2558,10 @@ describe('OrganizeManager', () => {
 
       await update({ autoOrganize: true, organizeFileTemplate: '{title}< - {track}>' })
       expect(organizeLibrary.calledOnceWithExactly(library.id)).to.be.true
+
+      organizeLibrary.resetHistory()
+      await update({ autoOrganize: true, organizeFolderTemplate: '{author}/{title}', organizeFileTemplate: '{title}< - {track}>', hideSingleBookSeries: true })
+      expect(organizeLibrary.called).to.be.false
     })
 
     it('treats a library saved before the organize settings existed as using the defaults', async () => {
@@ -2566,11 +2570,11 @@ describe('OrganizeManager', () => {
       const organizeLibrary = sinon.stub(manager, 'organizeLibrary')
       const update = (settings) => LibraryController.update.call({ organizeManager: manager }, { user: adminUser, body: { settings }, library: oldLibrary }, makeRes())
 
-      await update({ organizeFolderTemplate: '{author}/{series}/<{sequence}. >{title}' })
+      await update({ autoOrganize: true, organizeFolderTemplate: '{author}/{series}/<{sequence}. >{title}' })
       expect(organizeLibrary.called).to.be.false
-      expect(oldLibrary.toOldJSON().settings).to.include({ organizeFileTemplate: '{title}< - Part {track}>', autoOrganize: false })
+      expect(oldLibrary.toOldJSON().settings).to.include({ organizeFileTemplate: '{title}< - Part {track}>', autoOrganize: true })
 
-      await update({ autoOrganize: true, organizeFolderTemplate: '{title}' })
+      await update({ organizeFolderTemplate: '{title}' })
       expect(organizeLibrary.calledOnce).to.be.true
     })
 

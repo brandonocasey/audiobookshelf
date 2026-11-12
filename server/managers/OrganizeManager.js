@@ -400,7 +400,7 @@ class OrganizeManager {
   }
 
   /**
-   * Organize all items of a library when an organize template changed and auto organize is on
+   * Organize all items of a library when a template changed and auto organize is on
    *
    * @param {string} libraryId
    * @param {import('../models/Library').LibrarySettingsObject} previousSettings
