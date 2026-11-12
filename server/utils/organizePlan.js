@@ -108,6 +108,23 @@ function getFilesToRename(libraryItem) {
 }
 
 /**
+ * Token values for the book folder and for each file to rename
+ *
+ * @param {import('../models/LibraryItem')} libraryItem Book library item
+ * @returns {{folderValues:Object<string,string>, files:{path:string, filename:string, ext:string, values:Object<string,string>}[]}}
+ */
+function getTargetValues(libraryItem) {
+  const metadata = getTemplateMetadata(libraryItem)
+  const files = getFilesToRename(libraryItem).map((file) => ({
+    path: file.path,
+    filename: file.filename,
+    ext: file.ext,
+    values: getTemplateValues({ ...metadata, ...file.fileMetadata }, file.fileValues)
+  }))
+  return { folderValues: getTemplateValues(metadata), files }
+}
+
+/**
  * Where the templates put the book. Throws when a template is invalid.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
@@ -115,14 +132,15 @@ function getFilesToRename(libraryItem) {
  * @returns {{segments:string[], files:{path:string, filename:string, newName:string}[]}} Folder segments below the library folder and the new name of each file
  */
 function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplate }) {
-  const metadata = getTemplateMetadata(libraryItem)
-  const segments = renderFolderSegments(organizeFolderTemplate, getTemplateValues(metadata))
-  const files = getFilesToRename(libraryItem).map((file) => ({
-    path: file.path,
-    filename: file.filename,
-    newName: renderFileName(organizeFileTemplate, getTemplateValues({ ...metadata, ...file.fileMetadata }, file.fileValues), file.ext) || file.filename
-  }))
-  return { segments, files }
+  const { folderValues, files } = getTargetValues(libraryItem)
+  return {
+    segments: renderFolderSegments(organizeFolderTemplate, folderValues),
+    files: files.map((file) => ({
+      path: file.path,
+      filename: file.filename,
+      newName: renderFileName(organizeFileTemplate, file.values, file.ext) || file.filename
+    }))
+  }
 }
 
 /**
@@ -500,4 +518,4 @@ function planToClientJSON(plan) {
   return { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
 }
 
-module.exports = { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON }
+module.exports = { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON, getTargetValues, renderTarget }

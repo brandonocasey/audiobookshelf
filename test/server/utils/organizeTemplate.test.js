@@ -2,7 +2,7 @@ const { expect } = require('chai')
 const sinon = require('sinon')
 
 const Logger = require('../../../server/Logger')
-const { DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE, getTemplateSettingError, getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumber, getUploadLayout, getTemplateExample } = require('../../../server/utils/organizeTemplate')
+const { DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE, getTemplateSettingError, getTemplateValues, renderFolderSegments, renderFileName, formatTrackNumber, getUploadLayout } = require('../../../server/utils/organizeTemplate')
 
 describe('organizeTemplate', () => {
   const previousServerSettings = global.ServerSettings
@@ -309,25 +309,6 @@ describe('organizeTemplate', () => {
       const custom = { ...settings, organizeFileTemplate: '{title}' }
       const { newNames } = getUploadLayout(custom, { title: 'My Book', author: null, series: null }, ['a.mp3', 'b.mp3'])
       expect(newNames.size).to.equal(0)
-    })
-  })
-
-  describe('getTemplateExample', () => {
-    it('renders the default templates for a sample book', () => {
-      expect(getTemplateExample(DEFAULT_FOLDER_TEMPLATE, DEFAULT_FILE_TEMPLATE)).to.deep.equal({
-        folder: 'Brandon Sanderson/The Stormlight Archive/1. The Way of Kings',
-        folderError: null,
-        file: 'The Way of Kings - Part 01.mp3',
-        fileError: null
-      })
-    })
-
-    it('reports each invalid template without rendering it', () => {
-      const example = getTemplateExample('{nope}', '{title}/x')
-      expect(example.folder).to.equal('')
-      expect(example.folderError).to.equal('Unknown token "{nope}"')
-      expect(example.file).to.equal('')
-      expect(example.fileError).to.be.a('string')
     })
   })
 })

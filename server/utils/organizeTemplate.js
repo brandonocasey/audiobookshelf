@@ -363,49 +363,6 @@ function getUploadLayout(librarySettings, details, uploadedNames) {
   }
 }
 
-const SAMPLE_BOOK = {
-  title: 'The Way of Kings',
-  subtitle: 'Book One of the Stormlight Archive',
-  authors: ['Brandon Sanderson'],
-  series: [{ name: 'The Stormlight Archive', sequence: '1' }],
-  narrators: ['Michael Kramer', 'Kate Reading'],
-  genres: ['Fantasy', 'Epic'],
-  publishedYear: 2010,
-  publishedDate: '2010-08-31',
-  language: 'English',
-  abridged: false,
-  explicit: false,
-  asin: 'B003ZWFO7E',
-  isbn: '9780765326355',
-  publisher: 'Tor Books',
-  codec: 'aac',
-  bitRate: 64000,
-  channels: 2,
-  channelLayout: 'stereo',
-  format: 'mp3',
-  originalYear: '2010'
-}
-const SAMPLE_FILE = { track: '01', trackTotal: '12', trackTitle: 'Prelude to the Stormlight Archive', disc: '1', duration: 1234 }
-
-/**
- * Render the templates for a sample book
- *
- * @param {string} folderTemplate
- * @param {string} fileTemplate
- * @returns {{folder:string, folderError:string|null, file:string, fileError:string|null}}
- */
-function getTemplateExample(folderTemplate, fileTemplate) {
-  const folderError = getTemplateSettingError('organizeFolderTemplate', folderTemplate)
-  const fileError = getTemplateSettingError('organizeFileTemplate', fileTemplate)
-  const values = getTemplateValues(SAMPLE_BOOK, SAMPLE_FILE)
-  return {
-    folder: folderError ? '' : renderFolderSegments(folderTemplate, values).join('/'),
-    folderError,
-    file: fileError ? '' : renderFileName(fileTemplate, values, '.mp3'),
-    fileError
-  }
-}
-
 module.exports = {
   DEFAULT_FOLDER_TEMPLATE,
   DEFAULT_FILE_TEMPLATE,
@@ -417,6 +374,5 @@ module.exports = {
   renderFolderSegments,
   renderFileName,
   formatTrackNumber,
-  getUploadLayout,
-  getTemplateExample
+  getUploadLayout
 }

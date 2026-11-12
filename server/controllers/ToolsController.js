@@ -2,7 +2,7 @@ const { Request, Response, NextFunction } = require('express')
 const Logger = require('../Logger')
 const Database = require('../Database')
 const { isObject } = require('../utils/index')
-const { getTemplateExample } = require('../utils/organizeTemplate')
+const { getTemplateExample } = require('../utils/organizeExample')
 
 const PODCAST_ORGANIZE_MESSAGE = 'Organizing files is not supported for podcast libraries'
 
@@ -205,7 +205,7 @@ class ToolsController {
   /**
    * POST: /api/tools/organize/example
    * Body: { organizeFolderTemplate: string, organizeFileTemplate: string }
-   * Render the templates for a sample book
+   * Render the templates for sample books and list every token with an example value
    *
    * @param {RequestWithUser} req
    * @param {Response} res

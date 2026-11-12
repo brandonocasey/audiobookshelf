@@ -111,14 +111,7 @@
             </p>
           </ui-tooltip>
         </div>
-        <ui-text-input-with-label v-model="organizeFolderTemplate" :label="$strings.LabelOrganizeFolderTemplate" class="mb-1" @input="templatesUpdated" />
-        <p class="text-xs text-gray-300">{{ $strings.LabelOrganizeFolderTemplateHelp }}</p>
-        <p v-if="organizeExample.folderError" class="text-xs text-error pb-2">{{ organizeExample.folderError }}</p>
-        <p v-else class="text-xs pb-2">{{ $strings.LabelOrganizeExample }}: {{ organizeExample.folder }}</p>
-        <ui-text-input-with-label v-model="organizeFileTemplate" :label="$strings.LabelOrganizeFileTemplate" class="mb-1" @input="templatesUpdated" />
-        <p class="text-xs text-gray-300">{{ $strings.LabelOrganizeFileTemplateHelp }}</p>
-        <p v-if="organizeExample.fileError" class="text-xs text-error">{{ organizeExample.fileError }}</p>
-        <p v-else class="text-xs">{{ $strings.LabelOrganizeExample }}: {{ organizeExample.file }}</p>
+        <modals-libraries-organize-templates :folder-template.sync="organizeFolderTemplate" :file-template.sync="organizeFileTemplate" @change="formUpdated" />
       </div>
       <div v-if="isPodcastLibrary" class="p-2 w-full md:w-1/2">
         <ui-dropdown :label="$strings.LabelPodcastSearchRegion" v-model="podcastSearchRegion" :items="$podcastSearchRegionOptions" small class="max-w-72" menu-max-height="200px" @input="formUpdated" />
@@ -168,8 +161,6 @@ export default {
       autoOrganize: false,
       organizeFolderTemplate: '',
       organizeFileTemplate: '',
-      organizeExample: { folder: '', folderError: null, file: '', fileError: null },
-      organizeExampleTimeout: null,
       markAsFinishedWhen: 'timeRemaining',
       markAsFinishedValue: 10
     }
@@ -249,21 +240,6 @@ export default {
     formUpdated() {
       this.$emit('update', this.getLibraryData())
     },
-    templatesUpdated() {
-      this.formUpdated()
-      clearTimeout(this.organizeExampleTimeout)
-      this.organizeExampleTimeout = setTimeout(this.loadOrganizeExample, 300)
-    },
-    loadOrganizeExample() {
-      return this.$axios
-        .$post('/api/tools/organize/example', { organizeFolderTemplate: this.organizeFolderTemplate, organizeFileTemplate: this.organizeFileTemplate })
-        .then((example) => {
-          this.organizeExample = example
-        })
-        .catch((error) => {
-          console.error('Failed to load organize template example', error)
-        })
-    },
     init() {
       this.useSquareBookCovers = this.librarySettings.coverAspectRatio === this.$constants.BookCoverAspectRatio.SQUARE
       this.enableWatcher = !this.librarySettings.disableWatcher
@@ -280,7 +256,6 @@ export default {
       this.autoOrganize = !!this.librarySettings.autoOrganize
       this.organizeFolderTemplate = this.librarySettings.organizeFolderTemplate || ''
       this.organizeFileTemplate = this.librarySettings.organizeFileTemplate || ''
-      if (this.showOrganizeSettings) this.loadOrganizeExample()
       this.markAsFinishedWhen = this.librarySettings.markAsFinishedTimeRemaining ? 'timeRemaining' : 'percentComplete'
       if (!this.librarySettings.markAsFinishedTimeRemaining && !this.librarySettings.markAsFinishedPercentComplete) {
         this.markAsFinishedWhen = 'timeRemaining'
@@ -291,9 +266,6 @@ export default {
   mounted() {
     this.init()
     this.$store.dispatch('scanners/fetchProviders')
-  },
-  beforeDestroy() {
-    clearTimeout(this.organizeExampleTimeout)
   }
 }
 </script>
