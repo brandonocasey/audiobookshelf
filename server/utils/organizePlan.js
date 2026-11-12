@@ -42,6 +42,20 @@ function getPlayableAudioFiles({ media, isFile }) {
 }
 
 /**
+ * @param {import('../models/Book').AudioFileObject|null|undefined} audioFile
+ * @returns {{codec:string|undefined, bitRate:number|undefined, channels:number|undefined, channelLayout:string|undefined, format:string|undefined}}
+ */
+function getAudioDetails(audioFile) {
+  return {
+    codec: audioFile?.codec,
+    bitRate: audioFile?.bitRate,
+    channels: audioFile?.channels,
+    channelLayout: audioFile?.channelLayout,
+    format: audioFile?.metadata.ext.slice(1)
+  }
+}
+
+/**
  * @param {import('../models/LibraryItem')} libraryItem Book library item with authors and series loaded
  * @returns {import('./organizeTemplate').TemplateMetadata}
  */
@@ -63,11 +77,7 @@ function getTemplateMetadata(libraryItem) {
     asin: media.asin,
     isbn: media.isbn,
     publisher: media.publisher,
-    codec: firstAudioFile?.codec,
-    bitRate: firstAudioFile?.bitRate,
-    channels: firstAudioFile?.channels,
-    channelLayout: firstAudioFile?.channelLayout,
-    format: firstAudioFile?.metadata.ext.slice(1),
+    ...getAudioDetails(firstAudioFile),
     originalYear: firstAudioFile?.metaTags?.tagOriginalYear
   }
 }
@@ -78,7 +88,7 @@ function getTemplateMetadata(libraryItem) {
  * Excluded audio files keep their names.
  *
  * @param {import('../models/LibraryItem')} libraryItem Book library item
- * @returns {{path:string, filename:string, ext:string, fileMetadata:{format:string, codec:string|null, bitRate:number|null, channels:number|null, channelLayout:string|null}, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
+ * @returns {{path:string, filename:string, ext:string, fileMetadata:ReturnType<typeof getAudioDetails>, fileValues:import('./organizeTemplate').TemplateFileValues}[]}
  */
 function getFilesToRename(libraryItem) {
   const { media } = libraryItem
@@ -90,7 +100,7 @@ function getFilesToRename(libraryItem) {
       path,
       filename,
       ext,
-      fileMetadata: { format: ext.slice(1), codec: audioFile.codec, bitRate: audioFile.bitRate, channels: audioFile.channels, channelLayout: audioFile.channelLayout },
+      fileMetadata: getAudioDetails(audioFile),
       fileValues: {
         track: formatTrackNumber(i + 1, audioFiles.length),
         trackTotal: audioFiles.length > 1 ? String(audioFiles.length) : '',
@@ -102,7 +112,8 @@ function getFilesToRename(libraryItem) {
   })
   if (media.ebookFile) {
     const { path, filename, ext } = media.ebookFile.metadata
-    files.push({ path, filename, ext, fileMetadata: { format: ext.slice(1), codec: null, bitRate: null, channels: null, channelLayout: null }, fileValues: {} })
+    // The empty audio details override the first audio file's, so an ebook name gets none
+    files.push({ path, filename, ext, fileMetadata: { ...getAudioDetails(null), format: ext.slice(1) }, fileValues: {} })
   }
   return files
 }

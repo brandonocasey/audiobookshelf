@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full max-h-[calc(80vh-7.5rem)] overflow-y-auto px-1 md:px-4 py-1 mb-4">
+  <div class="w-full h-full max-h-[calc(80vh-7.5rem)] overflow-y-auto px-1 md:px-4 pt-1 pb-24 mb-4">
     <div class="flex flex-wrap">
       <div class="flex items-center p-2 w-full md:w-1/2">
         <ui-toggle-switch v-model="useSquareBookCovers" size="sm" @input="formUpdated" />
