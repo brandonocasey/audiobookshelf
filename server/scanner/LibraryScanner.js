@@ -34,7 +34,7 @@ class LibraryScanner {
     this.fileScanCountsByLibraryId = new Map()
     /** @type {[import('../Watcher').PendingFileUpdate[], Task][]} */
     this.pendingFileUpdatesToScan = []
-    /** @type {Map<string, Map<string, string>>} - library id to the books auto match changed while it was scanned, by item id to their target from before the match */
+    /** @type {Map<string, Map<string, string>>} - library id to item id to its target before an auto match during a scan */
     this.autoOrganizeTargetsByLibraryId = new Map()
   }
 
@@ -467,7 +467,7 @@ class LibraryScanner {
 
   /**
    * Auto organize skips books while their library is scanned.
-   * Organize the books that auto match changed once no scan of their library is left.
+   * Organize the matched books whose target changed once no scan of their library is left.
    *
    * @param {Iterable<string>} libraryIds
    */
