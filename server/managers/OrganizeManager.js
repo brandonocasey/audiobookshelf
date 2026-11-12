@@ -400,7 +400,7 @@ class OrganizeManager {
   }
 
   /**
-   * Organize all items of a library when an organize template changed
+   * Organize all items of a library when a template changed and auto organize is on
    *
    * @param {string} libraryId
    * @param {import('../models/Library').LibrarySettingsObject} previousSettings
@@ -408,6 +408,7 @@ class OrganizeManager {
    * @returns {Promise<void>}
    */
   async organizeLibraryIfTemplatesChanged(libraryId, previousSettings, newSettings) {
+    if (!newSettings.autoOrganize) return
     if (TEMPLATE_SETTING_KEYS.some((key) => previousSettings[key] !== newSettings[key])) {
       await this.organizeLibrary(libraryId)
     }
