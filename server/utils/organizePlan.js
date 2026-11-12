@@ -223,11 +223,74 @@ async function getUnorganizableReason(libraryItem, library) {
 }
 
 /**
+ * Paths of library items. Tells whether any lie below a folder without checking each one.
+ */
+class LibraryItemPaths {
+  /**
+   * @param {string[]} paths Absolute POSIX paths
+   */
+  constructor(paths) {
+    /** @type {Set<string>} */
+    this.paths = new Set()
+    /** @type {Map<string, number>} Folder path to the number of item paths below it */
+    this.countsByFolder = new Map()
+    paths.forEach((path) => this.add(path))
+  }
+
+  /**
+   * @param {string} path
+   * @returns {boolean}
+   */
+  has(path) {
+    return this.paths.has(path)
+  }
+
+  /**
+   * @param {string} path
+   */
+  add(path) {
+    if (this.paths.has(path)) return
+    this.paths.add(path)
+    this.countFolders(path, 1)
+  }
+
+  /**
+   * @param {string} path
+   */
+  delete(path) {
+    if (this.paths.delete(path)) this.countFolders(path, -1)
+  }
+
+  /**
+   * @param {string} path
+   * @param {1|-1} change
+   */
+  countFolders(path, change) {
+    for (let folder = Path.posix.dirname(path); ; folder = Path.posix.dirname(folder)) {
+      const count = (this.countsByFolder.get(folder) || 0) + change
+      if (count > 0) this.countsByFolder.set(folder, count)
+      else this.countsByFolder.delete(folder)
+      if (folder === Path.posix.dirname(folder)) return
+    }
+  }
+
+  /**
+   * @param {string} folderPath
+   * @param {string} ignoredPath Path of a library item to leave out
+   * @returns {boolean}
+   */
+  hasPathBelow(folderPath, ignoredPath) {
+    const isIgnoredPathBelow = this.paths.has(ignoredPath) && ignoredPath !== folderPath && isSameOrSubPath(folderPath, ignoredPath)
+    return (this.countsByFolder.get(folderPath) || 0) - (isIgnoredPathBelow ? 1 : 0) > 0
+  }
+}
+
+/**
  * Whether a library item lives in a folder above the path
  *
  * @param {string} libraryFolderPath
  * @param {string} path
- * @param {Set<string>|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
+ * @param {LibraryItemPaths|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
  * @returns {Promise<boolean>}
  */
 async function isInsideAnotherItem(libraryFolderPath, path, libraryItemPaths) {
@@ -242,7 +305,7 @@ async function isInsideAnotherItem(libraryFolderPath, path, libraryItemPaths) {
  * Callers MUST only pass a target path that differs from the path of the item being organized.
  *
  * @param {string} path
- * @param {Set<string>|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
+ * @param {LibraryItemPaths|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
  * @returns {Promise<boolean>}
  */
 async function isPathOfLibraryItem(path, libraryItemPaths) {
@@ -251,14 +314,28 @@ async function isPathOfLibraryItem(path, libraryItemPaths) {
 }
 
 /**
+ * Whether a library item has a path below the path, even when it is missing from disk
+ *
+ * @param {string} path
+ * @param {string} ignoredPath Path of the item being organized
+ * @param {LibraryItemPaths|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
+ * @returns {Promise<boolean>}
+ */
+async function hasLibraryItemBelow(path, ignoredPath, libraryItemPaths) {
+  if (!libraryItemPaths) return !!(await Database.libraryItemModel.findByDescendantPath(path, ignoredPath))
+  return libraryItemPaths.hasPathBelow(path, ignoredPath)
+}
+
+/**
  * @param {string} libraryFolderPath
  * @param {string} toPath A target path that differs from the path of the item being organized
- * @param {Set<string>|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
+ * @param {string} fromPath Path of the item being organized
+ * @param {LibraryItemPaths|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
  * @returns {Promise<'targetInsideItem'|'targetExists'|null>} Skip reason for a target that another library item holds
  */
-async function getTargetItemReason(libraryFolderPath, toPath, libraryItemPaths) {
+async function getTargetItemReason(libraryFolderPath, toPath, fromPath, libraryItemPaths) {
   if (await isInsideAnotherItem(libraryFolderPath, toPath, libraryItemPaths)) return 'targetInsideItem'
-  if (await isPathOfLibraryItem(toPath, libraryItemPaths)) return 'targetExists'
+  if ((await isPathOfLibraryItem(toPath, libraryItemPaths)) || (await hasLibraryItemBelow(toPath, fromPath, libraryItemPaths))) return 'targetExists'
   return null
 }
 
@@ -290,21 +367,21 @@ function isFolderChanged(libraryItem, plan) {
  */
 async function getPlanTargetItemReason(libraryItem, library, plan) {
   if (!isFolderChanged(libraryItem, plan)) return null
-  return getTargetItemReason(getLibraryFolderPath(libraryItem, library), plan.toPath, null)
+  return getTargetItemReason(getLibraryFolderPath(libraryItem, library), plan.toPath, plan.fromPath, null)
 }
 
 /**
  * @param {import('../models/LibraryItem')} libraryItem
  * @param {OrganizePlan} plan Has fromPath and toPath set
  * @param {OrganizeMove[]} fileMoves
- * @param {{libraryFolderPath:string, libraryItemPaths:Set<string>|null}} library Paths of all items in the library are looked up in the database when null
+ * @param {{libraryFolderPath:string, libraryItemPaths:LibraryItemPaths|null}} library Paths of all items in the library are looked up in the database when null
  * @returns {Promise<string|null>}
  */
 async function getConflictReason(libraryItem, plan, fileMoves, { libraryFolderPath, libraryItemPaths }) {
   const hasFolderChange = isFolderChanged(libraryItem, plan)
   const isNested = isSameOrSubPath(plan.fromPath, plan.toPath) || isSameOrSubPath(plan.toPath, plan.fromPath)
   if (hasFolderChange && !libraryItem.isFile && isNested) return 'targetNested'
-  const targetItemReason = hasFolderChange ? await getTargetItemReason(libraryFolderPath, plan.toPath, libraryItemPaths) : null
+  const targetItemReason = hasFolderChange ? await getTargetItemReason(libraryFolderPath, plan.toPath, plan.fromPath, libraryItemPaths) : null
   if (targetItemReason) return targetItemReason
 
   // Anything at the target blocks a single-file item, including itself
@@ -320,7 +397,7 @@ async function getConflictReason(libraryItem, plan, fileMoves, { libraryFolderPa
  *
  * @param {import('../models/LibraryItem')} libraryItem Expanded book library item
  * @param {import('../models/Library')} library Library with folders
- * @param {Set<string>|null} [libraryItemPaths] Paths of all items in the library, to avoid a database lookup for each item
+ * @param {LibraryItemPaths|null} [libraryItemPaths] Paths of all items in the library, to avoid a database lookup for each item
  * @returns {Promise<OrganizePlan>}
  */
 async function buildPlan(libraryItem, library, libraryItemPaths = null) {
@@ -394,4 +471,4 @@ function planToClientJSON(plan) {
   return { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
 }
 
-module.exports = { buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON }
+module.exports = { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON }

@@ -12,6 +12,7 @@ const { reqSupportsWebp, clampPositiveInt } = require('../utils/index')
 const { ScanResult, AudioMimeType } = require('../utils/constants')
 const { getAudioMimeTypeFromExtname, encodeUriPath } = require('../utils/fileUtils')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
+const LibraryScanner = require('../scanner/LibraryScanner')
 const AudioFileScanner = require('../scanner/AudioFileScanner')
 const Scanner = require('../scanner/Scanner')
 
@@ -849,6 +850,7 @@ class LibraryItemController {
     res.sendStatus(200)
 
     const libraryId = libraryItems[0].libraryId
+    await LibraryScanner.waitForOrganizeRuns(libraryId, 'batch item scan')
     for (const libraryItem of libraryItems) {
       if (libraryItem.isFile) {
         Logger.warn(`[LibraryItemController] Re-scanning file library items not yet supported`)
@@ -877,6 +879,7 @@ class LibraryItemController {
       return res.sendStatus(500)
     }
 
+    await LibraryScanner.waitForOrganizeRuns(req.libraryItem.libraryId, 'item scan')
     const result = await LibraryItemScanner.scanLibraryItem(req.libraryItem.id)
     await Database.resetLibraryIssuesFilterData(req.libraryItem.libraryId)
     res.json({

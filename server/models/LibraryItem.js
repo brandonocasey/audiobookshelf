@@ -1,5 +1,5 @@
 const Path = require('path')
-const { DataTypes, Model } = require('sequelize')
+const { DataTypes, Model, Op } = require('sequelize')
 const fsExtra = require('../libs/fsExtra')
 const Logger = require('../Logger')
 const libraryFilters = require('../utils/queries/libraryFilters')
@@ -591,6 +591,19 @@ class LibraryItem extends Model {
     const ancestorPaths = getPathsBelowLibraryFolder(libraryFolderPath, Path.posix.dirname(filePathToPOSIX(path)))
     if (!ancestorPaths.length) return null
     return this.findOne({ where: { path: ancestorPaths } })
+  }
+
+  /**
+   * Library item with a path below the folder
+   *
+   * @param {string} folderPath
+   * @param {string} ignoredPath Path of a library item to leave out
+   * @returns {Promise<LibraryItem|null>}
+   */
+  static async findByDescendantPath(folderPath, ignoredPath) {
+    const folderPrefix = `${filePathToPOSIX(folderPath)}/`
+    // A range from "folder/" up to "folder0" ("0" follows "/") matches the paths below the folder without LIKE wildcards
+    return this.findOne({ where: { path: { [Op.gte]: folderPrefix, [Op.lt]: `${folderPrefix.slice(0, -1)}0`, [Op.ne]: ignoredPath } } })
   }
 
   /**

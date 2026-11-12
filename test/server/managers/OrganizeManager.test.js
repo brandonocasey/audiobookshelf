@@ -20,6 +20,7 @@ const LibraryScanner = require('../../../server/scanner/LibraryScanner')
 const OrganizeManager = require('../../../server/managers/OrganizeManager')
 const TaskManager = require('../../../server/managers/TaskManager')
 const Task = require('../../../server/objects/Task')
+const { ScanResult } = require('../../../server/utils/constants')
 const ToolsController = require('../../../server/controllers/ToolsController')
 const LibraryController = require('../../../server/controllers/LibraryController')
 const LibraryItemController = require('../../../server/controllers/LibraryItemController')
@@ -1094,6 +1095,64 @@ describe('OrganizeManager', () => {
       expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
       expect(fs.existsSync(rel('Writer', 'Book'))).to.be.false
     })
+
+    describe('of a missing item', () => {
+      // Only the row is left, so the folder checks on disk cannot see it
+      async function addMissingBook(relDir) {
+        const missingId = await addBook(relDir, ['Sub.m4b'], { title: 'Missing', authors: ['Writer'] })
+        fs.rmSync(rel(relDir.split('/')[0]), { recursive: true })
+        await Database.libraryItemModel.update({ isMissing: true }, { where: { id: missingId } })
+      }
+
+      it('below the target skip the item in a preview and when organizing it', async () => {
+        await addMissingBook('Writer/Book/2. Sub')
+        const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+
+        const preview = await manager.previewItems([libraryItemId])
+        const result = await manager.organizeItem(libraryItemId)
+
+        expect(preview.plans.map((plan) => plan.skipReason)).to.deep.equal(['targetExists'])
+        expect(result).to.deep.equal({ itemId: libraryItemId, status: 'skipped', reason: 'targetExists' })
+        expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+      })
+
+      it('below the target skip the item in the check made right before a move', async () => {
+        const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+
+        const result = await manager.withSharedItemPaths(async () => {
+          await manager.getItemPaths(library.id)
+          await addMissingBook('Writer/Book/2. Sub')
+          return manager.organizeItem(libraryItemId)
+        })
+
+        expect(result).to.deep.equal({ itemId: libraryItemId, status: 'skipped', reason: 'targetExists' })
+        expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+      })
+
+      it('are not found by the ignored path', async () => {
+        await addMissingBook('Writer/Book/2. Sub')
+
+        expect(await Database.libraryItemModel.findByDescendantPath(rel('Writer', 'Book'), rel('Raw'))).to.not.be.null
+        expect(await Database.libraryItemModel.findByDescendantPath(rel('Writer', 'Book'), rel('Writer', 'Book', '2. Sub'))).to.be.null
+      })
+
+      it('beside the target and named like it do not block the item', async () => {
+        await addMissingBook('Writer/Book Messiah')
+        await addMissingBook('Writer/Booker')
+        await addMissingBook('Writer/Bak/2. Sub')
+        const prefixId = await addBook('Raw 1', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+        const wildcardId = await addBook('Raw 2', ['b.m4b'], { title: 'B_k', authors: ['Writer'] })
+
+        const preview = await manager.previewItems([prefixId, wildcardId])
+        const results = [await manager.organizeItem(prefixId), await manager.organizeItem(wildcardId)]
+
+        expect(preview.plans.map((plan) => plan.skipReason)).to.deep.equal([null, null])
+        expect(results).to.deep.equal([
+          { itemId: prefixId, status: 'moved' },
+          { itemId: wildcardId, status: 'moved' }
+        ])
+      })
+    })
   })
 
   describe('tasks with a preview', () => {
@@ -1141,6 +1200,18 @@ describe('OrganizeManager', () => {
       expect(movedItem.path).to.equal(rel('Writer', 'Book Three'))
       expect(fs.existsSync(rel('Writer', 'Book Three', 'Book Three.m4b'))).to.be.true
       expect(await manager.autoOrganizeItem(libraryItemId, targetBefore)).to.be.null
+    })
+
+    it('logs the error of a failed library lookup and starts no task', async () => {
+      const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+      const lookupError = new Error('lookup exploded')
+      sinon.stub(manager, 'getLibraryIdsOfItems').rejects(lookupError)
+      const startTask = sinon.spy(manager, 'startTask')
+
+      await manager.autoOrganizeItemsInBackground(new Map([[libraryItemId, 'target']]))
+
+      expect(Logger.error.calledOnceWith('[OrganizeManager] Failed to start auto organize of edited items', lookupError)).to.be.true
+      expect(startTask.called).to.be.false
     })
 
     it('runs after a metadata edit through the controller and returns the moved item', async () => {
@@ -1611,6 +1682,38 @@ describe('OrganizeManager', () => {
       expect(Logger.info.getCalls().some((call) => /Waiting for organize to finish before the library scan/.test(call.args[0]))).to.be.true
     })
 
+    describe('rescans of items', () => {
+      const endpoints = {
+        'one item': (libraryItemId, loadedItem) => ({ rescan: LibraryItemController.scan({ user: { isAdminOrUp: true }, libraryItem: loadedItem }, { json: sinon.spy() }), responded: Promise.resolve() }),
+        // The batch responds before it rescans
+        'a batch': (libraryItemId) => {
+          const responded = deferred()
+          const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true }, body: { libraryItemIds: [libraryItemId] } }, { sendStatus: responded.resolve })
+          return { rescan, responded: responded.promise }
+        }
+      }
+
+      Object.entries(endpoints).forEach(([name, rescanEndpoint]) => {
+        it(`hold the rescan of ${name} until the organize run has ended`, async () => {
+          const libraryItemId = await addUnorganizedBook('Book')
+          const [hold] = holdExecutePlan(1)
+          const scanLibraryItem = sinon.stub(LibraryItemScanner, 'scanLibraryItem').resolves(ScanResult.NOTHING)
+          manager.startTask([libraryItemId])
+          await hold.entered.promise
+
+          const { rescan, responded } = rescanEndpoint(libraryItemId, await loadItem(libraryItemId))
+          await responded
+          await flush()
+          expect(scanLibraryItem.called).to.be.false
+          hold.release.resolve()
+          await rescan
+
+          // The organize run rescans the moved item first. The endpoint passes no options.
+          expect(scanLibraryItem.lastCall.args).to.deep.equal([libraryItemId])
+        })
+      })
+    })
+
     /** Resolves when the nth task has started its items */
     function whenTaskStarted(taskNumber) {
       const started = deferred()
@@ -1838,6 +1941,30 @@ describe('OrganizeManager', () => {
         scanRelease.resolve()
         await scan
         expect(manager.getBusyReason(await loadItem(libraryItemId))).to.be.null
+      })
+
+      it('skips organizing items of every library of a batch while its first folder is scanned, and again once it failed', async () => {
+        const otherLibrary = await addOtherLibrary()
+        const libraryItemId = await addUnorganizedBook('Book')
+        const [firstFileUpdates, pendingTask] = watcherBatch(library, libraryFolder)
+        const [otherFileUpdates] = watcherBatch(otherLibrary, otherLibrary.libraryFolders[0])
+        const scanStarted = deferred()
+        const scanRelease = deferred()
+        sinon.stub(LibraryScanner, 'scanFolderUpdates').callsFake(async () => {
+          scanStarted.resolve()
+          await scanRelease.promise
+          throw new Error('scan exploded')
+        })
+
+        const scan = LibraryScanner.scanFilesChanged([...otherFileUpdates, ...firstFileUpdates], pendingTask).catch((error) => error)
+        await scanStarted.promise
+
+        expect(manager.getBusyReason(await loadItem(libraryItemId))).to.equal('libraryScanning')
+        expect(manager.getBusyReason({ id: 'other', libraryId: otherLibrary.id })).to.equal('libraryScanning')
+        scanRelease.resolve()
+        expect((await scan).message).to.equal('scan exploded')
+        expect(manager.getBusyReason(await loadItem(libraryItemId))).to.be.null
+        expect(manager.getBusyReason({ id: 'other', libraryId: otherLibrary.id })).to.be.null
       })
     })
 

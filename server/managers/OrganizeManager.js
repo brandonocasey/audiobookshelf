@@ -10,7 +10,7 @@ const LibraryScanner = require('../scanner/LibraryScanner')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const { ScanResult } = require('../utils/constants')
 const { filePathToPOSIX, getPathsBelowLibraryFolder, getPathIdentity, isSameFile, isPathTakenByOther, removeTreeWithReadOnlyFolders } = require('../utils/fileUtils')
-const { buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
+const { LibraryItemPaths, buildPlan, getPlanTargetItemReason, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
 const { captureMediaChoices, restoreMediaChoices } = require('../utils/organizeMediaChoices')
 const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
 
@@ -64,7 +64,7 @@ class OrganizeManager {
     this.itemIdsInProgress = new Set()
     /** Organizing runs one item at a time. Two runs cannot both pass the target check and move onto one path. */
     this.executionQueue = Promise.resolve()
-    /** @type {Map<string, Promise<Set<string>>>} Item paths per library, kept while a preview or run is active */
+    /** @type {Map<string, Promise<LibraryItemPaths>>} Item paths per library, kept while a preview or run is active */
     this.itemPathsByLibraryId = new Map()
     this.activeRunCount = 0
   }
@@ -114,12 +114,12 @@ class OrganizeManager {
 
   /**
    * @param {string} libraryId
-   * @returns {Promise<Set<string>|null>} Null outside of a preview or run
+   * @returns {Promise<LibraryItemPaths|null>} Null outside of a preview or run
    */
   async getItemPaths(libraryId) {
     if (this.activeRunCount === 0) return null
     if (!this.itemPathsByLibraryId.has(libraryId)) {
-      const itemPaths = Database.libraryItemModel.findAll({ where: { libraryId }, attributes: ['path'] }).then((libraryItems) => new Set(libraryItems.map((libraryItem) => filePathToPOSIX(libraryItem.path))))
+      const itemPaths = Database.libraryItemModel.findAll({ where: { libraryId }, attributes: ['path'] }).then((libraryItems) => new LibraryItemPaths(libraryItems.map((libraryItem) => filePathToPOSIX(libraryItem.path))))
       itemPaths.catch(() => this.itemPathsByLibraryId.delete(libraryId))
       this.itemPathsByLibraryId.set(libraryId, itemPaths)
     }
@@ -311,14 +311,16 @@ class OrganizeManager {
 
   /**
    * Start a background task for the edited items whose target changed.
-   * Scans wait from the first call on, not only once the task has started.
+   * Scans wait for this run from the moment it is called.
    *
    * @param {Map<string, string|null>} targetsBefore Library item id to getAutoOrganizeTarget from before the edit
    * @returns {Promise<void>}
    */
   autoOrganizeItemsInBackground(targetsBefore) {
-    return LibraryScanner.trackOrganizeRun(this.getLibraryIdsOfItems([...targetsBefore.keys()]), async () => {
+    const libraryIds = this.getLibraryIdsOfItems([...targetsBefore.keys()])
+    return LibraryScanner.trackOrganizeRun(libraryIds, async () => {
       try {
+        await libraryIds
         const libraryItemIds = []
         for (const [libraryItemId, targetBefore] of targetsBefore) {
           if (await this.hasTargetChanged(libraryItemId, targetBefore)) libraryItemIds.push(libraryItemId)

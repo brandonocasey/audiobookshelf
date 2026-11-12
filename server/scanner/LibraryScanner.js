@@ -69,7 +69,7 @@ class LibraryScanner {
     if (Array.isArray(libraryIds)) {
       this.addOrganizeRun(libraryIds, ended)
     } else {
-      // A failed lookup also fails the run, which is where the error is reported
+      // The run MUST await the lookup, which is where a failed lookup is reported
       const lookup = libraryIds.then(
         (ids) => this.addOrganizeRun(ids, ended),
         () => {}
@@ -100,7 +100,7 @@ class LibraryScanner {
   }
 
   /**
-   * Resolves once no organize run is active, including runs that start while waiting
+   * Resolves once the library's organize runs and the runs still looking up their libraries have ended, including runs that start while waiting
    *
    * @param {string} libraryId
    * @param {string} scanName What is waiting, for the log
@@ -517,6 +517,8 @@ class LibraryScanner {
       return
     }
     this.scanningFilesChanged = true
+    // Organize skips these libraries until the whole batch is scanned. A book it moves could be one the batch is about to flag as missing.
+    libraryIds.forEach((libraryId) => this.librariesWatcherScanning.add(libraryId))
 
     const results = {
       added: 0,
@@ -527,58 +529,56 @@ class LibraryScanner {
     // files grouped by folder
     const folderGroups = this.getFileUpdatesGrouped(fileUpdates)
 
-    for (const folderId in folderGroups) {
-      const libraryId = folderGroups[folderId].libraryId
+    try {
+      for (const folderId in folderGroups) {
+        const libraryId = folderGroups[folderId].libraryId
 
-      const library = await Database.libraryModel.findByPk(libraryId, {
-        include: {
-          model: Database.libraryFolderModel,
-          where: {
-            id: folderId
+        const library = await Database.libraryModel.findByPk(libraryId, {
+          include: {
+            model: Database.libraryFolderModel,
+            where: {
+              id: folderId
+            }
           }
+        })
+        if (!library) {
+          Logger.error(`[LibraryScanner] Library "${libraryId}" not found in files changed ${libraryId}`)
+          continue
         }
-      })
-      if (!library) {
-        Logger.error(`[LibraryScanner] Library "${libraryId}" not found in files changed ${libraryId}`)
-        continue
-      }
-      const folder = library.libraryFolders[0]
+        const folder = library.libraryFolders[0]
 
-      const filePathItems = folderGroups[folderId].fileUpdates.map((fileUpdate) => fileUtils.getFilePathItemFromFileUpdate(fileUpdate))
-      const fileUpdateGroup = scanUtils.groupFileItemsIntoLibraryItemDirs(library.mediaType, filePathItems, !!library.settings?.audiobooksOnly, true)
+        const filePathItems = folderGroups[folderId].fileUpdates.map((fileUpdate) => fileUtils.getFilePathItemFromFileUpdate(fileUpdate))
+        const fileUpdateGroup = scanUtils.groupFileItemsIntoLibraryItemDirs(library.mediaType, filePathItems, !!library.settings?.audiobooksOnly, true)
 
-      if (!Object.keys(fileUpdateGroup).length) {
-        Logger.info(`[LibraryScanner] No important changes to scan for in folder "${folderId}"`)
-        continue
-      }
-      this.librariesWatcherScanning.add(libraryId)
-      let folderScanResults
-      try {
-        folderScanResults = await this.scanFolderUpdates(library, folder, fileUpdateGroup)
-      } finally {
-        this.librariesWatcherScanning.delete(libraryId)
-      }
-      Logger.debug(`[LibraryScanner] Folder scan results`, folderScanResults)
-
-      // Tally results to share with client
-      let resetFilterData = false
-      Object.values(folderScanResults).forEach((scanResult) => {
-        if (scanResult === ScanResult.ADDED) {
-          resetFilterData = true
-          results.added++
-        } else if (scanResult === ScanResult.REMOVED) {
-          resetFilterData = true
-          results.removed++
-        } else if (scanResult === ScanResult.UPDATED) {
-          resetFilterData = true
-          results.updated++
+        if (!Object.keys(fileUpdateGroup).length) {
+          Logger.info(`[LibraryScanner] No important changes to scan for in folder "${folderId}"`)
+          continue
         }
-      })
+        const folderScanResults = await this.scanFolderUpdates(library, folder, fileUpdateGroup)
+        Logger.debug(`[LibraryScanner] Folder scan results`, folderScanResults)
 
-      // If something was updated then reset numIssues filter data for library
-      if (resetFilterData) {
-        await Database.resetLibraryIssuesFilterData(libraryId)
+        // Tally results to share with client
+        let resetFilterData = false
+        Object.values(folderScanResults).forEach((scanResult) => {
+          if (scanResult === ScanResult.ADDED) {
+            resetFilterData = true
+            results.added++
+          } else if (scanResult === ScanResult.REMOVED) {
+            resetFilterData = true
+            results.removed++
+          } else if (scanResult === ScanResult.UPDATED) {
+            resetFilterData = true
+            results.updated++
+          }
+        })
+
+        // If something was updated then reset numIssues filter data for library
+        if (resetFilterData) {
+          await Database.resetLibraryIssuesFilterData(libraryId)
+        }
       }
+    } finally {
+      libraryIds.forEach((libraryId) => this.librariesWatcherScanning.delete(libraryId))
     }
 
     // Complete task and send results to client
