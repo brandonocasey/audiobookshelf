@@ -15,6 +15,7 @@ const { captureMediaChoices, restoreMediaChoices } = require('../utils/organizeM
 const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
 
 const PREVIEW_CHUNK_SIZE = 50
+const LIBRARY_ID_LOOKUP_CHUNK_SIZE = 500
 const MAX_REPORTED_RESULTS = 100
 
 /**
@@ -229,6 +230,16 @@ class OrganizeManager {
     const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
     if (!libraryItem) return { itemId: libraryItemId, status: 'skipped', reason: 'missing' }
 
+    return LibraryScanner.trackOrganizeRun([libraryItem.libraryId], () => this.planAndExecuteLoadedItem(libraryItem, expectedHash))
+  }
+
+  /**
+   * @param {import('../models/LibraryItem')} libraryItem Expanded library item
+   * @param {string|null} expectedHash
+   * @returns {Promise<OrganizeResult>}
+   */
+  async planAndExecuteLoadedItem(libraryItem, expectedHash) {
+    const libraryItemId = libraryItem.id
     const library = await Database.libraryModel.findByIdWithFolders(libraryItem.libraryId)
     const plan = await this.planItem(libraryItem, library)
     if (plan.skipReason) return { itemId: libraryItemId, status: 'skipped', reason: plan.skipReason }
@@ -253,6 +264,18 @@ class OrganizeManager {
     const library = await Database.libraryModel.findByPk(libraryItem.libraryId)
     if (!library?.librarySettings.autoOrganize) return null
     return getRenderedTargetKey(libraryItem, library.librarySettings)
+  }
+
+  /**
+   * @param {import('../models/LibraryItem')[]} libraryItems Expanded library items
+   * @returns {Promise<Map<string, string|null>>} Library item id to getAutoOrganizeTarget
+   */
+  async getAutoOrganizeTargets(libraryItems) {
+    const targetsBefore = new Map()
+    for (const libraryItem of libraryItems) {
+      targetsBefore.set(libraryItem.id, await this.getAutoOrganizeTarget(libraryItem))
+    }
+    return targetsBefore
   }
 
   /**
@@ -358,7 +381,23 @@ class OrganizeManager {
    * @param {Object<string,string>|null} planHashes
    */
   runTask(task, libraryItemIds, planHashes) {
-    return this.withSharedItemPaths(() => this.organizeTaskItems(task, libraryItemIds, planHashes))
+    return this.withSharedItemPaths(async () => {
+      const libraryIds = await this.getLibraryIdsOfItems(libraryItemIds)
+      return LibraryScanner.trackOrganizeRun(libraryIds, () => this.organizeTaskItems(task, libraryItemIds, planHashes))
+    })
+  }
+
+  /**
+   * @param {string[]} libraryItemIds
+   * @returns {Promise<string[]>}
+   */
+  async getLibraryIdsOfItems(libraryItemIds) {
+    const libraryIds = new Set()
+    for (let i = 0; i < libraryItemIds.length; i += LIBRARY_ID_LOOKUP_CHUNK_SIZE) {
+      const libraryItems = await Database.libraryItemModel.findAll({ where: { id: libraryItemIds.slice(i, i + LIBRARY_ID_LOOKUP_CHUNK_SIZE) }, attributes: ['libraryId'], group: ['libraryId'] })
+      libraryItems.forEach((libraryItem) => libraryIds.add(libraryItem.libraryId))
+    }
+    return [...libraryIds]
   }
 
   /**

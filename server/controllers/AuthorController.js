@@ -109,8 +109,13 @@ class AuthorController {
     let hasUpdated = false
 
     const authorNameUpdate = payload.name !== undefined && payload.name !== req.author.name
+    // Books of the author with where the templates put them now, loaded before the rename changes their names
+    let allItemsWithAuthor = []
+    let organizeTargetsBefore = new Map()
     if (authorNameUpdate) {
       payload.lastFirst = Database.authorModel.getLastFirst(payload.name)
+      allItemsWithAuthor = await Database.authorModel.getAllLibraryItemsForAuthor(req.author.id)
+      organizeTargetsBefore = await this.organizeManager.getAutoOrganizeTargets(allItemsWithAuthor)
     }
 
     // Check if author name matches another author in the same library and merge the authors
@@ -129,7 +134,6 @@ class AuthorController {
     if (existingAuthor) {
       Logger.info(`[AuthorController] Merging author "${req.author.name}" with "${existingAuthor.name}"`)
       const bookAuthorsToCreate = []
-      const allItemsWithAuthor = await Database.authorModel.getAllLibraryItemsForAuthor(req.author.id)
 
       const libraryItems = []
       allItemsWithAuthor.forEach((libraryItem) => {
@@ -171,6 +175,9 @@ class AuthorController {
         author: existingAuthor.toOldJSON(),
         merged: true
       })
+
+      // Runs after the response because moving and rescanning many books is slow
+      this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
       return
     }
 
@@ -189,8 +196,6 @@ class AuthorController {
     if (hasUpdated) {
       let numBooksForAuthor = 0
       if (authorNameUpdate) {
-        const allItemsWithAuthor = await Database.authorModel.getAllLibraryItemsForAuthor(req.author.id)
-
         numBooksForAuthor = allItemsWithAuthor.length
         const libraryItems = []
         // Update author name on all books
@@ -221,6 +226,9 @@ class AuthorController {
       author: req.author.toOldJSON(),
       updated: hasUpdated
     })
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**

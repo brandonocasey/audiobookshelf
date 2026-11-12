@@ -78,12 +78,30 @@ class SeriesController {
     if (!Object.keys(payload).length) {
       return res.status(400).send('No valid fields to update')
     }
+
+    // Every book in the series, with where the templates put it before the rename
+    const isRename = payload.name !== undefined && payload.name !== req.series.name
+    const libraryItems = isRename ? await Database.seriesModel.getAllLibraryItemsForSeries(req.series.id) : []
+    const organizeTargetsBefore = await this.organizeManager.getAutoOrganizeTargets(libraryItems)
+
     req.series.set(payload)
     if (req.series.changed()) {
       await req.series.save()
       SocketAuthority.emitter('series_updated', req.series.toOldJSON())
     }
+
+    if (isRename) {
+      // The scanner reads this file first, so a stale series name here would come back when the books are rescanned
+      const renamedLibraryItems = await Database.seriesModel.getAllLibraryItemsForSeries(req.series.id)
+      for (const libraryItem of renamedLibraryItems) {
+        await libraryItem.saveMetadataFile()
+      }
+      if (renamedLibraryItems.length) SocketAuthority.libraryItemsEmitter('items_updated', renamedLibraryItems)
+    }
     res.json(req.series.toOldJSON())
+
+    // Runs after the response because moving and rescanning many books is slow
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**
