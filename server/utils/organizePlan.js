@@ -51,13 +51,14 @@ function getTemplateMetadata(media) {
 
 /**
  * Playable audio files in playback order, then the ebook, with their file template values.
- * Excluded audio files keep their names.
+ * Excluded audio files keep their names, except the only file of a single-file item, which moves with the item.
  *
- * @param {import('../models/Book')} media
+ * @param {import('../models/LibraryItem')} libraryItem Book library item
  * @returns {{path:string, filename:string, ext:string, fileValues:{track?:string, disc?:string}}[]}
  */
-function getFilesToRename(media) {
-  const audioFiles = media.audioFiles.filter((audioFile) => !audioFile.exclude).sort((a, b) => a.index - b.index)
+function getFilesToRename(libraryItem) {
+  const { media, isFile } = libraryItem
+  const audioFiles = media.audioFiles.filter((audioFile) => isFile || !audioFile.exclude).sort((a, b) => a.index - b.index)
   const files = audioFiles.map((audioFile, i) => {
     const disc = audioFile.discNumFromMeta ?? audioFile.discNumFromFilename
     return {
@@ -77,14 +78,14 @@ function getFilesToRename(media) {
 /**
  * Where the templates put the book. Throws when a template is invalid.
  *
- * @param {import('../models/Book')} media
+ * @param {import('../models/LibraryItem')} libraryItem Book library item
  * @param {{organizeFolderTemplate:string, organizeFileTemplate:string}} templates
  * @returns {{segments:string[], files:{path:string, filename:string, newName:string}[]}} Folder segments below the library folder and the new name of each file
  */
-function renderTarget(media, { organizeFolderTemplate, organizeFileTemplate }) {
-  const values = getTemplateValues(getTemplateMetadata(media))
+function renderTarget(libraryItem, { organizeFolderTemplate, organizeFileTemplate }) {
+  const values = getTemplateValues(getTemplateMetadata(libraryItem.media))
   const segments = renderFolderSegments(organizeFolderTemplate, values)
-  const files = getFilesToRename(media).map((file) => ({
+  const files = getFilesToRename(libraryItem).map((file) => ({
     path: file.path,
     filename: file.filename,
     newName: renderFileName(organizeFileTemplate, { ...values, ...file.fileValues }, file.ext) || file.filename
@@ -95,13 +96,13 @@ function renderTarget(media, { organizeFolderTemplate, organizeFileTemplate }) {
 /**
  * Comparable value for where the templates put the book, to tell whether an edit moved the target.
  *
- * @param {import('../models/Book')} media Book with authors and series loaded
+ * @param {import('../models/LibraryItem')} libraryItem Book library item with authors and series loaded
  * @param {import('../models/Library').LibrarySettingsObject} librarySettings
  * @returns {string|null} Null when the templates are invalid
  */
-function getRenderedTargetKey(media, librarySettings) {
+function getRenderedTargetKey(libraryItem, librarySettings) {
   try {
-    const { segments, files } = renderTarget(media, librarySettings)
+    const { segments, files } = renderTarget(libraryItem, librarySettings)
     return JSON.stringify({ segments, names: files.map((file) => file.newName) })
   } catch (error) {
     return null
@@ -238,19 +239,51 @@ async function isInsideAnotherItem(libraryFolderPath, path, libraryItemPaths) {
 
 /**
  * @param {import('../models/LibraryItem')} libraryItem
+ * @param {import('../models/Library')} library Library with folders
+ * @returns {string}
+ */
+function getLibraryFolderPath(libraryItem, library) {
+  return filePathToPOSIX(library.libraryFolders.find((folder) => folder.id === libraryItem.libraryFolderId).path)
+}
+
+/**
+ * @param {import('../models/LibraryItem')} libraryItem
+ * @param {OrganizePlan} plan Has fromPath and toPath set
+ * @returns {boolean} False when the plan only renames files in place
+ */
+function isFolderChanged(libraryItem, plan) {
+  return libraryItem.isFile || plan.toPath !== plan.fromPath
+}
+
+/**
+ * Whether the plan puts the item inside the folder of another library item, looked up in the database now.
+ * A plan made from a list of item paths can be out of date when items were added since.
+ *
+ * @param {import('../models/LibraryItem')} libraryItem
+ * @param {import('../models/Library')} library Library with folders
+ * @param {OrganizePlan} plan
+ * @returns {Promise<boolean>}
+ */
+async function isPlanInsideAnotherItem(libraryItem, library, plan) {
+  if (!isFolderChanged(libraryItem, plan)) return false
+  return isInsideAnotherItem(getLibraryFolderPath(libraryItem, library), plan.toPath, null)
+}
+
+/**
+ * @param {import('../models/LibraryItem')} libraryItem
  * @param {OrganizePlan} plan Has fromPath and toPath set
  * @param {OrganizeMove[]} fileMoves
  * @param {{libraryFolderPath:string, libraryItemPaths:Set<string>|null}} library Paths of all items in the library are looked up in the database when null
  * @returns {Promise<string|null>}
  */
 async function getConflictReason(libraryItem, plan, fileMoves, { libraryFolderPath, libraryItemPaths }) {
-  const isFolderChanged = libraryItem.isFile || plan.toPath !== plan.fromPath
+  const hasFolderChange = isFolderChanged(libraryItem, plan)
   const isNested = isSameOrSubPath(plan.fromPath, plan.toPath) || isSameOrSubPath(plan.toPath, plan.fromPath)
-  if (isFolderChanged && !libraryItem.isFile && isNested) return 'targetNested'
-  if (isFolderChanged && (await isInsideAnotherItem(libraryFolderPath, plan.toPath, libraryItemPaths))) return 'targetInsideItem'
+  if (hasFolderChange && !libraryItem.isFile && isNested) return 'targetNested'
+  if (hasFolderChange && (await isInsideAnotherItem(libraryFolderPath, plan.toPath, libraryItemPaths))) return 'targetInsideItem'
 
   // Anything at the target blocks a single-file item, including itself
-  if (isFolderChanged && (await isPathTakenByOther(libraryItem.isFile ? null : plan.fromPath, plan.toPath))) return 'targetExists'
+  if (hasFolderChange && (await isPathTakenByOther(libraryItem.isFile ? null : plan.fromPath, plan.toPath))) return 'targetExists'
 
   if (!libraryItem.isFile && (await hasFileNameConflict(fileMoves))) return 'fileNameConflict'
   return null
@@ -274,10 +307,10 @@ async function buildPlan(libraryItem, library, libraryItemPaths = null) {
   plan.skipReason = await getUnorganizableReason(libraryItem, library)
   if (plan.skipReason) return plan
 
-  const libraryFolderPath = filePathToPOSIX(library.libraryFolders.find((folder) => folder.id === libraryItem.libraryFolderId).path)
+  const libraryFolderPath = getLibraryFolderPath(libraryItem, library)
   let fileMoves
   try {
-    const { segments, files } = renderTarget(media, library.librarySettings)
+    const { segments, files } = renderTarget(libraryItem, library.librarySettings)
     if (!segments.length) {
       plan.skipReason = 'emptyFolderName'
       return plan
@@ -336,4 +369,4 @@ function planToClientJSON(plan) {
   return { itemId, title, fromPath, toPath, fromRelPath, toRelPath, fileRenames, warnings, skipReason, changed, hash }
 }
 
-module.exports = { buildPlan, getMovedPath, getRenderedTargetKey, planToClientJSON }
+module.exports = { buildPlan, isPlanInsideAnotherItem, getMovedPath, getRenderedTargetKey, planToClientJSON }

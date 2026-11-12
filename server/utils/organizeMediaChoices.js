@@ -50,14 +50,20 @@ function restoreAudioFileChoices(media, savedAudioFiles, moves) {
 
 /**
  * @param {import('../models/LibraryItem')} libraryItem
- * @param {string} savedEbookPath
+ * @param {string|null} savedEbookPath Null when the book had no primary ebook
  * @param {import('./organizePlan').OrganizeMove[]} moves
+ * @returns {Promise<boolean>} True when the primary ebook changed
  */
 async function restorePrimaryEbook(libraryItem, savedEbookPath, moves) {
-  const ebookPath = getMovedPath(savedEbookPath, moves)
-  if (libraryItem.media.ebookFile?.metadata.path === ebookPath) return
-  const ebookLibraryFile = libraryItem.getLibraryFiles().find((libraryFile) => libraryFile.isEBookFile && libraryFile.metadata.path === ebookPath)
-  if (ebookLibraryFile) await libraryItem.setPrimaryEbookFile(ebookLibraryFile)
+  const ebookPath = savedEbookPath && getMovedPath(savedEbookPath, moves)
+  if ((libraryItem.media.ebookFile?.metadata.path || null) === ebookPath) return false
+  let ebookLibraryFile = null
+  if (ebookPath) {
+    ebookLibraryFile = libraryItem.getLibraryFiles().find((libraryFile) => libraryFile.isEBookFile && libraryFile.metadata.path === ebookPath)
+    if (!ebookLibraryFile) return false
+  }
+  await libraryItem.setPrimaryEbookFile(ebookLibraryFile)
+  return true
 }
 
 /**
@@ -67,7 +73,7 @@ async function restorePrimaryEbook(libraryItem, savedEbookPath, moves) {
  * @param {string} libraryItemId
  * @param {MediaChoices} choices
  * @param {import('./organizePlan').OrganizeMove[]} moves
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} True when the book changed
  */
 async function restoreMediaChoices(libraryItemId, choices, moves) {
   const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
@@ -83,7 +89,8 @@ async function restoreMediaChoices(libraryItemId, choices, moves) {
   }
   if (hasMediaChanges) await media.save()
 
-  if (choices.ebookPath) await restorePrimaryEbook(libraryItem, choices.ebookPath, moves)
+  const hasEbookChange = await restorePrimaryEbook(libraryItem, choices.ebookPath, moves)
+  return hasMediaChanges || hasEbookChange
 }
 
 module.exports = { captureMediaChoices, restoreMediaChoices }

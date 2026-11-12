@@ -9,6 +9,7 @@ const { execFileSync } = require('child_process')
 const Database = require('../../../server/Database')
 const Logger = require('../../../server/Logger')
 const Watcher = require('../../../server/Watcher')
+const SocketAuthority = require('../../../server/SocketAuthority')
 const prober = require('../../../server/utils/prober')
 const fsExtra = require('../../../server/libs/fsExtra')
 const AudioMetaTags = require('../../../server/objects/metadata/AudioMetaTags')
@@ -292,6 +293,60 @@ describe('OrganizeManager', () => {
       })
     }
 
+    it('keeps a book without a primary ebook that way after the rescan promotes one', async () => {
+      const libraryItemId = await addBook('Raw', ['a.mp3', 'book.epub'], { title: 'Book', authors: ['Writer'] })
+      const before = await loadItem(libraryItemId)
+      expect(before.media.ebookFile).to.not.be.null
+      await before.setPrimaryEbookFile(null)
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result.status).to.equal('moved')
+      expect(listFiles(rel('Writer', 'Book'))).to.deep.equal(['Book.mp3', 'book.epub'])
+      const after = await loadItem(libraryItemId)
+      expect(after.media.ebookFile).to.be.null
+      expect(
+        after
+          .getLibraryFiles()
+          .filter((libraryFile) => libraryFile.isEBookFile)
+          .map((libraryFile) => libraryFile.isSupplementary)
+      ).to.deep.equal([true])
+    })
+
+    describe('item_updated event', () => {
+      let emitter
+
+      beforeEach(() => {
+        emitter = sinon.stub(SocketAuthority, 'libraryItemEmitter')
+      })
+
+      it('is sent again with the restored settings after the rescan', async () => {
+        const libraryItemId = await addBookWithChoices()
+
+        await manager.organizeItem(libraryItemId)
+
+        const updates = emitter.getCalls().filter((call) => call.args[0] === 'item_updated' && call.args[1].id === libraryItemId)
+        expect(updates.length).to.be.at.least(2)
+        const lastUpdate = updates[updates.length - 1].args[1]
+        expect(lastUpdate.path).to.equal(rel('Writer', 'Book'))
+        expect(lastUpdate.media.audioFiles.map((audioFile) => [path.basename(audioFile.metadata.path), audioFile.exclude])).to.deep.equal([
+          ['Part 1.mp3', true],
+          ['Book - Part 1.mp3', false],
+          ['Book - Part 2.mp3', false]
+        ])
+        expect(path.basename(lastUpdate.media.ebookFile.metadata.path)).to.equal('Book.pdf')
+        expect(path.basename(lastUpdate.media.coverPath)).to.equal('b.jpg')
+      })
+
+      it('is not sent again when the rescan left the settings as they were', async () => {
+        const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3'], { title: 'Book', authors: ['Writer'] })
+
+        await manager.organizeItem(libraryItemId)
+
+        expect(emitter.getCalls().filter((call) => call.args[1].id === libraryItemId)).to.have.length(1)
+      })
+    })
+
     it('numbers the tracks by the stored audio file index, not the order they are stored in', async () => {
       const libraryItemId = await addBook('Raw', ['a.mp3', 'b.mp3', 'c.mp3'], { title: 'Book', authors: ['Writer'] })
       const book = (await loadItem(libraryItemId)).media
@@ -356,6 +411,29 @@ describe('OrganizeManager', () => {
       expect(after.path).to.equal(newDir)
       expect(after.media.coverPath).to.equal(path.join(newDir, 'cover.jpg'))
       expect(fs.readdirSync(metadataFolder)).to.deep.equal([])
+    })
+
+    it('moves the file of a single-file item into the folder when the file is excluded', async () => {
+      const libraryItemId = await addSingleFileBook('Loose Book.m4b', { title: 'Loose Book', authors: ['Some Author'] })
+      const metadataFolder = path.join(global.MetadataPath, 'items', libraryItemId)
+      fs.mkdirSync(metadataFolder, { recursive: true })
+      fs.writeFileSync(path.join(metadataFolder, 'cover.jpg'), 'cover')
+      const book = (await loadItem(libraryItemId)).media
+      book.audioFiles = book.audioFiles.map((audioFile) => ({ ...audioFile, exclude: true }))
+      book.changed('audioFiles', true)
+      book.coverPath = path.join(metadataFolder, 'cover.jpg')
+      await book.save()
+      global.ServerSettings.storeCoverWithItem = true
+
+      const result = await manager.organizeItem(libraryItemId)
+
+      expect(result.status).to.equal('moved')
+      const newDir = rel('Some Author', 'Loose Book')
+      expect(listFiles(libraryDir)).to.not.include('Loose Book.m4b')
+      expect(listFiles(newDir)).to.deep.equal(['Loose Book.m4b', 'cover.jpg'])
+      const after = await loadItem(libraryItemId)
+      expect(after.media.audioFiles.map((audioFile) => audioFile.exclude)).to.deep.equal([true])
+      expect(after.media.coverPath).to.equal(path.join(newDir, 'cover.jpg'))
     })
 
     it('leaves the cover in the metadata folder when covers are not stored with the item', async () => {
@@ -956,7 +1034,8 @@ describe('OrganizeManager', () => {
       expect(task.data.results).to.deep.equal([{ itemId: bookOfSaga, title: 'One', status: 'skipped', reason: 'targetInsideItem' }])
       expect(listFiles(rel('Writer'))).to.deep.equal(['Other', 'Other/Other.m4b', 'Saga', 'Saga/Saga.m4b'])
       expect(fs.existsSync(rel('Raw 2', 'b.m4b'))).to.be.true
-      expect(findByAncestorPath.called).to.be.false
+      // Planning uses the loaded paths. Only the two items that move are looked up right before their move
+      expect(findByAncestorPath.callCount).to.equal(2)
       expect(findAll.getCalls().filter((call) => call.args[0]?.attributes?.[0] === 'path')).to.have.length(1)
     })
 
@@ -966,7 +1045,22 @@ describe('OrganizeManager', () => {
 
       expect((await manager.organizeItem(libraryItemId)).status).to.equal('moved')
 
-      expect(findByAncestorPath.calledOnce).to.be.true
+      // Once to plan and once right before the move
+      expect(findByAncestorPath.calledTwice).to.be.true
+    })
+
+    it('do not hide an item added after they were loaded from the check made right before a move', async () => {
+      const libraryItemId = await addBook('Raw', ['a.m4b'], { title: 'Book', authors: ['Writer'] })
+
+      const result = await manager.withSharedItemPaths(async () => {
+        await manager.getItemPaths(library.id)
+        await addBook('Writer', ['w.m4b'], { title: 'Writer Book', authors: ['Someone'] })
+        return manager.organizeItem(libraryItemId)
+      })
+
+      expect(result).to.deep.equal({ itemId: libraryItemId, status: 'skipped', reason: 'targetInsideItem' })
+      expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
+      expect(fs.existsSync(rel('Writer', 'Book'))).to.be.false
     })
   })
 

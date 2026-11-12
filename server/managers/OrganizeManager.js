@@ -4,12 +4,13 @@ const fs = require('../libs/fsExtra')
 const Logger = require('../Logger')
 const Database = require('../Database')
 const Watcher = require('../Watcher')
+const SocketAuthority = require('../SocketAuthority')
 const TaskManager = require('./TaskManager')
 const LibraryScanner = require('../scanner/LibraryScanner')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const { ScanResult } = require('../utils/constants')
 const { filePathToPOSIX, getPathsBelowLibraryFolder, getPathIdentity, isSameFile, isPathTakenByOther, removeTreeWithReadOnlyFolders } = require('../utils/fileUtils')
-const { buildPlan, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
+const { buildPlan, isPlanInsideAnotherItem, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
 const { captureMediaChoices, restoreMediaChoices } = require('../utils/organizeMediaChoices')
 const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
 
@@ -233,6 +234,8 @@ class OrganizeManager {
     if (plan.skipReason) return { itemId: libraryItemId, status: 'skipped', reason: plan.skipReason }
     if (!plan.changed) return { itemId: libraryItemId, status: 'unchanged' }
     if (expectedHash && expectedHash !== plan.hash) return { itemId: libraryItemId, status: 'skipped', reason: 'planChanged' }
+    // The planning item paths are loaded once per run, so an item added since is only seen by this lookup
+    if (await isPlanInsideAnotherItem(libraryItem, library, plan)) return { itemId: libraryItemId, status: 'skipped', reason: 'targetInsideItem' }
 
     await this.executePlan(libraryItem, library, plan)
     await this.recordMovedItemPath(libraryItem.libraryId, plan.fromPath, plan.toPath)
@@ -249,7 +252,7 @@ class OrganizeManager {
     if (!libraryItem.isBook) return null
     const library = await Database.libraryModel.findByPk(libraryItem.libraryId)
     if (!library?.librarySettings.autoOrganize) return null
-    return getRenderedTargetKey(libraryItem.media, library.librarySettings)
+    return getRenderedTargetKey(libraryItem, library.librarySettings)
   }
 
   /**
@@ -543,7 +546,11 @@ class OrganizeManager {
     if (scanResult === ScanResult.NOTHING) {
       throw new Error(`Rescan of library item "${journal.libraryItemId}" at "${path}" found nothing to update`)
     }
-    await restoreMediaChoices(journal.libraryItemId, journal.mediaChoices, moves)
+    const hasRestoredChanges = await restoreMediaChoices(journal.libraryItemId, journal.mediaChoices, moves)
+    if (hasRestoredChanges) {
+      // The scan already told clients about the item, but before the restore
+      SocketAuthority.libraryItemEmitter('item_updated', await Database.libraryItemModel.getExpandedById(journal.libraryItemId))
+    }
   }
 
   /**
