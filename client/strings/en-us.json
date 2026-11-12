@@ -1170,6 +1170,7 @@
   "ToastRescanUpToDate": "Re-Scan complete item was up to date",
   "ToastRescanUpdated": "Re-Scan complete item was updated",
   "ToastScanFailed": "Failed to scan library item",
+  "ToastScanOrganizing": "Files in this library are being organized. Try again when that finishes.",
   "ToastSelectAtLeastOneUser": "Select at least one user",
   "ToastSendEbookToDeviceFailed": "Failed to send ebook to device",
   "ToastSendEbookToDeviceSuccess": "Ebook sent to device \"{0}\"",

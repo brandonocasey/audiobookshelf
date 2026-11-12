@@ -780,7 +780,7 @@ export default {
         })
         .catch((error) => {
           console.error('Failed to scan library item', error)
-          this.$toast.error(this.$strings.ToastScanFailed)
+          this.$toast.error(error.response?.status === 409 ? this.$strings.ToastScanOrganizing : this.$strings.ToastScanFailed)
         })
         .finally(() => {
           this.processing = false

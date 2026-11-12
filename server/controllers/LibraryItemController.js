@@ -849,17 +849,25 @@ class LibraryItemController {
 
     res.sendStatus(200)
 
-    const libraryId = libraryItems[0].libraryId
-    await LibraryScanner.waitForOrganizeRuns(libraryId, 'batch item scan')
-    for (const libraryItem of libraryItems) {
-      if (libraryItem.isFile) {
-        Logger.warn(`[LibraryItemController] Re-scanning file library items not yet supported`)
-      } else {
-        await LibraryItemScanner.scanLibraryItem(libraryItem.id)
+    const libraryIds = new Set(libraryItems.map((libraryItem) => libraryItem.libraryId))
+    await LibraryScanner.waitForOrganizeRuns(libraryIds, 'batch item scan')
+    // Organize skips the libraries while their items are scanned, so it cannot move an item under the scan
+    LibraryScanner.addFileScanMark(libraryIds)
+    try {
+      for (const libraryItem of libraryItems) {
+        if (libraryItem.isFile) {
+          Logger.warn(`[LibraryItemController] Re-scanning file library items not yet supported`)
+        } else {
+          await LibraryItemScanner.scanLibraryItem(libraryItem.id)
+        }
       }
+    } finally {
+      LibraryScanner.removeFileScanMark(libraryIds)
     }
 
-    await Database.resetLibraryIssuesFilterData(libraryId)
+    for (const libraryId of libraryIds) {
+      await Database.resetLibraryIssuesFilterData(libraryId)
+    }
   }
 
   /**
@@ -879,8 +887,18 @@ class LibraryItemController {
       return res.sendStatus(500)
     }
 
-    await LibraryScanner.waitForOrganizeRuns(req.libraryItem.libraryId, 'item scan')
-    const result = await LibraryItemScanner.scanLibraryItem(req.libraryItem.id)
+    // Waiting could take minutes, so the request is rejected instead
+    if (LibraryScanner.hasOrganizeRuns([req.libraryItem.libraryId])) {
+      return res.status(409).send('Files in this library are being organized. Try again when that finishes.')
+    }
+
+    LibraryScanner.addFileScanMark([req.libraryItem.libraryId])
+    let result
+    try {
+      result = await LibraryItemScanner.scanLibraryItem(req.libraryItem.id)
+    } finally {
+      LibraryScanner.removeFileScanMark([req.libraryItem.libraryId])
+    }
     await Database.resetLibraryIssuesFilterData(req.libraryItem.libraryId)
     res.json({
       result: Object.keys(ScanResult).find((key) => ScanResult[key] == result)

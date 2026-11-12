@@ -30,8 +30,8 @@ class LibraryScanner {
     this.organizeRunLookups = new Set()
 
     this.scanningFilesChanged = false
-    /** @type {Set<string>} - library ids a watcher scan is reading */
-    this.librariesWatcherScanning = new Set()
+    /** @type {Map<string, number>} - library id to the number of watcher and item scans reading it */
+    this.fileScanCountsByLibraryId = new Map()
     /** @type {[import('../Watcher').PendingFileUpdate[], Task][]} */
     this.pendingFileUpdatesToScan = []
   }
@@ -45,13 +45,13 @@ class LibraryScanner {
   }
 
   /**
-   * A scan that reads the library folders, from a library scan or the watcher. A match all run does not count.
+   * A scan that reads the library folders, from a library scan, the watcher or an item re-scan. A match all run does not count.
    *
    * @param {string} libraryId
    * @returns {boolean}
    */
   isLibraryFileScanning(libraryId) {
-    return (this.isLibraryScanning(libraryId) && !this.librariesMatching.includes(libraryId)) || this.librariesWatcherScanning.has(libraryId)
+    return (this.isLibraryScanning(libraryId) && !this.librariesMatching.includes(libraryId)) || this.fileScanCountsByLibraryId.has(libraryId)
   }
 
   /**
@@ -100,17 +100,57 @@ class LibraryScanner {
   }
 
   /**
-   * Resolves once the library's organize runs and the runs still looking up their libraries have ended, including runs that start while waiting
+   * Whether an organize run is active or pending for any of the libraries
    *
-   * @param {string} libraryId
+   * @param {Iterable<string>} libraryIds
+   * @returns {boolean}
+   */
+  hasOrganizeRuns(libraryIds) {
+    return this.getPendingOrganizeRuns(libraryIds).length > 0
+  }
+
+  /**
+   * @param {Iterable<string>} libraryIds
+   * @returns {Promise<void>[]}
+   */
+  getPendingOrganizeRuns(libraryIds) {
+    return [...this.organizeRunLookups, ...[...libraryIds].flatMap((libraryId) => [...(this.organizeRunsByLibraryId.get(libraryId) || [])])]
+  }
+
+  /**
+   * Resolves once no run is active or pending for any of the libraries at the same moment, including runs that start while waiting.
+   * Callers MUST mark the libraries as file scanning without awaiting after this resolves. Marking before it would make the run waited on skip its books.
+   *
+   * @param {Iterable<string>} libraryIds
    * @param {string} scanName What is waiting, for the log
    */
-  async waitForOrganizeRuns(libraryId, scanName) {
-    const getPending = () => [...this.organizeRunLookups, ...(this.organizeRunsByLibraryId.get(libraryId) || [])]
-    if (!getPending().length) return
-    Logger.info(`[LibraryScanner] Waiting for organize to finish before the ${scanName} of library "${libraryId}"`)
-    while (getPending().length) {
-      await Promise.all(getPending())
+  async waitForOrganizeRuns(libraryIds, scanName) {
+    if (!this.hasOrganizeRuns(libraryIds)) return
+    Logger.info(`[LibraryScanner] Waiting for organize to finish before the ${scanName} of libraries "${[...libraryIds].join('", "')}"`)
+    while (this.hasOrganizeRuns(libraryIds)) {
+      await Promise.all(this.getPendingOrganizeRuns(libraryIds))
+    }
+  }
+
+  /**
+   * Organize skips the libraries until each mark is removed. Marks of overlapping scans add up.
+   *
+   * @param {Iterable<string>} libraryIds
+   */
+  addFileScanMark(libraryIds) {
+    for (const libraryId of libraryIds) {
+      this.fileScanCountsByLibraryId.set(libraryId, (this.fileScanCountsByLibraryId.get(libraryId) || 0) + 1)
+    }
+  }
+
+  /**
+   * @param {Iterable<string>} libraryIds
+   */
+  removeFileScanMark(libraryIds) {
+    for (const libraryId of libraryIds) {
+      const count = this.fileScanCountsByLibraryId.get(libraryId) - 1
+      if (count > 0) this.fileScanCountsByLibraryId.set(libraryId, count)
+      else this.fileScanCountsByLibraryId.delete(libraryId)
     }
   }
 
@@ -130,7 +170,7 @@ class LibraryScanner {
    */
   async scan(library, forceRescan = false) {
     // Requests made during the wait are rejected below once this scan has started
-    await this.waitForOrganizeRuns(library.id, 'library scan')
+    await this.waitForOrganizeRuns([library.id], 'library scan')
 
     if (this.isLibraryScanning(library.id)) {
       Logger.error(`[LibraryScanner] Already scanning ${library.id}`)
@@ -508,7 +548,7 @@ class LibraryScanner {
 
     // Waiting before the queue check keeps the batches of other libraries from queueing behind this one
     const libraryIds = new Set(fileUpdates.map((fileUpdate) => fileUpdate.libraryId))
-    await Promise.all([...libraryIds].map((libraryId) => this.waitForOrganizeRuns(libraryId, 'watcher scan')))
+    await this.waitForOrganizeRuns(libraryIds, 'watcher scan')
 
     // If already scanning files from watcher then add these updates to queue
     if (this.scanningFilesChanged) {
@@ -518,7 +558,7 @@ class LibraryScanner {
     }
     this.scanningFilesChanged = true
     // Organize skips these libraries until the whole batch is scanned. A book it moves could be one the batch is about to flag as missing.
-    libraryIds.forEach((libraryId) => this.librariesWatcherScanning.add(libraryId))
+    this.addFileScanMark(libraryIds)
 
     const results = {
       added: 0,
@@ -577,8 +617,14 @@ class LibraryScanner {
           await Database.resetLibraryIssuesFilterData(libraryId)
         }
       }
+    } catch (error) {
+      Logger.error(`[LibraryScanner] Failed to scan files changed from watcher`, error)
+      throw error
     } finally {
-      libraryIds.forEach((libraryId) => this.librariesWatcherScanning.delete(libraryId))
+      this.removeFileScanMark(libraryIds)
+      // A failed batch MUST NOT leave later batches queued forever
+      this.scanningFilesChanged = false
+      this.scanNextPendingFileUpdates()
     }
 
     // Complete task and send results to client
@@ -596,13 +642,12 @@ class LibraryScanner {
     }
     pendingTask.setFinished(null, true)
     TaskManager.taskFinished(pendingTask)
+  }
 
-    this.scanningFilesChanged = false
-
-    if (this.pendingFileUpdatesToScan.length) {
-      Logger.debug(`[LibraryScanner] File updates finished scanning with more updates in queue (${this.pendingFileUpdatesToScan.length})`)
-      this.scanFilesChanged(...this.pendingFileUpdatesToScan.shift())
-    }
+  scanNextPendingFileUpdates() {
+    if (!this.pendingFileUpdatesToScan.length) return
+    Logger.debug(`[LibraryScanner] File updates finished scanning with more updates in queue (${this.pendingFileUpdatesToScan.length})`)
+    this.scanFilesChanged(...this.pendingFileUpdatesToScan.shift())
   }
 
   /**

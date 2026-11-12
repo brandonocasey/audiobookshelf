@@ -3,6 +3,7 @@ const { Sequelize } = require('sequelize')
 const sinon = require('sinon')
 const fs = require('fs')
 const os = require('os')
+const crypto = require('crypto')
 const path = require('path')
 const { execFileSync } = require('child_process')
 const { setImmediate: flush } = require('timers/promises')
@@ -73,9 +74,15 @@ describe('OrganizeManager', () => {
   })
 
   afterEach(async () => {
+    // Organize runs keep writing to the folders and the database until they end, so wait for them before removing either
+    await LibraryScanner.waitForOrganizeRuns([...LibraryScanner.organizeRunsByLibraryId.keys()], 'the end of the test')
     sinon.restore()
     LibraryScanner.librariesScanning = []
     LibraryScanner.librariesMatching = []
+    LibraryScanner.organizeRunsByLibraryId.clear()
+    LibraryScanner.scanningFilesChanged = false
+    LibraryScanner.pendingFileUpdatesToScan = []
+    LibraryScanner.fileScanCountsByLibraryId.clear()
     fs.rmSync(tmpDir, { recursive: true, force: true })
     await Database.sequelize.sync({ force: true })
   })
@@ -174,11 +181,24 @@ describe('OrganizeManager', () => {
     }
   }
 
+  /**
+   * Hard links keep the inodes of files a move is about to remove. A real second file system numbers its files on its own,
+   * but here the copy of one file can get the inode of an earlier removed source, and the scanner then takes it for that file.
+   */
+  function keepInodesTaken(src, pinnedDir) {
+    fs.mkdirSync(pinnedDir, { recursive: true })
+    const filePaths = fs.statSync(src).isDirectory() ? fs.readdirSync(src, { recursive: true }).map((name) => path.join(src, name)) : [src]
+    for (const filePath of filePaths.filter((candidate) => fs.lstatSync(candidate).isFile())) {
+      fs.linkSync(filePath, path.join(pinnedDir, crypto.randomUUID()))
+    }
+  }
+
   /** Every move goes through the copy-and-delete fallback used across file systems */
   function simulateCrossDeviceMoves() {
     const originalRename = fsExtra.rename
     sinon.stub(fsExtra, 'rename').callsFake((src, dest) => {
       if (src.endsWith('.tmp')) return originalRename(src, dest)
+      keepInodesTaken(src, path.join(tmpDir, 'inodes-kept'))
       return Promise.reject(Object.assign(new Error('cross-device link not permitted'), { code: 'EXDEV' }))
     })
   }
@@ -1129,13 +1149,6 @@ describe('OrganizeManager', () => {
         expect(fs.existsSync(rel('Raw', 'a.m4b'))).to.be.true
       })
 
-      it('are not found by the ignored path', async () => {
-        await addMissingBook('Writer/Book/2. Sub')
-
-        expect(await Database.libraryItemModel.findByDescendantPath(rel('Writer', 'Book'), rel('Raw'))).to.not.be.null
-        expect(await Database.libraryItemModel.findByDescendantPath(rel('Writer', 'Book'), rel('Writer', 'Book', '2. Sub'))).to.be.null
-      })
-
       it('beside the target and named like it do not block the item', async () => {
         await addMissingBook('Writer/Book Messiah')
         await addMissingBook('Writer/Booker')
@@ -1651,10 +1664,6 @@ describe('OrganizeManager', () => {
       scanLibrary = sinon.stub(LibraryScanner, 'scanLibrary').resolves(false)
     })
 
-    afterEach(() => {
-      LibraryScanner.organizeRunsByLibraryId.clear()
-    })
-
     it('starts right away when nothing is organizing', async () => {
       await LibraryScanner.scan(library)
 
@@ -1683,34 +1692,132 @@ describe('OrganizeManager', () => {
     })
 
     describe('rescans of items', () => {
-      const endpoints = {
-        'one item': (libraryItemId, loadedItem) => ({ rescan: LibraryItemController.scan({ user: { isAdminOrUp: true }, libraryItem: loadedItem }, { json: sinon.spy() }), responded: Promise.resolve() }),
-        // The batch responds before it rescans
-        'a batch': (libraryItemId) => {
-          const responded = deferred()
-          const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true }, body: { libraryItemIds: [libraryItemId] } }, { sendStatus: responded.resolve })
-          return { rescan, responded: responded.promise }
-        }
+      function rescanOne(loadedItem) {
+        const res = { statusCode: 200, status: (code) => ((res.statusCode = code), res), send: (body) => ((res.body = body), res), json: (body) => ((res.body = body), res) }
+        res.done = LibraryItemController.scan({ user: { isAdminOrUp: true }, libraryItem: loadedItem }, res)
+        return res
       }
 
-      Object.entries(endpoints).forEach(([name, rescanEndpoint]) => {
-        it(`hold the rescan of ${name} until the organize run has ended`, async () => {
-          const libraryItemId = await addUnorganizedBook('Book')
-          const [hold] = holdExecutePlan(1)
-          const scanLibraryItem = sinon.stub(LibraryItemScanner, 'scanLibraryItem').resolves(ScanResult.NOTHING)
-          manager.startTask([libraryItemId])
-          await hold.entered.promise
+      function rescanBatch(libraryItemIds) {
+        const responded = deferred()
+        const rescan = LibraryItemController.batchScan({ user: { isAdminOrUp: true }, body: { libraryItemIds } }, { sendStatus: responded.resolve })
+        return { rescan, responded: responded.promise }
+      }
 
-          const { rescan, responded } = rescanEndpoint(libraryItemId, await loadItem(libraryItemId))
-          await responded
-          await flush()
-          expect(scanLibraryItem.called).to.be.false
-          hold.release.resolve()
-          await rescan
+      it('reject the rescan of one item while an organize run is active, without waiting', async () => {
+        const libraryItemId = await addUnorganizedBook('Book')
+        const [hold] = holdExecutePlan(1)
+        const scanLibraryItem = sinon.stub(LibraryItemScanner, 'scanLibraryItem').resolves(ScanResult.NOTHING)
+        manager.startTask([libraryItemId])
+        await hold.entered.promise
 
-          // The organize run rescans the moved item first. The endpoint passes no options.
-          expect(scanLibraryItem.lastCall.args).to.deep.equal([libraryItemId])
+        const res = rescanOne(await loadItem(libraryItemId))
+        await res.done
+
+        expect(res.statusCode).to.equal(409)
+        expect(res.body).to.equal('Files in this library are being organized. Try again when that finishes.')
+        expect(scanLibraryItem.called).to.be.false
+        expect(LibraryScanner.isLibraryFileScanning(library.id)).to.be.false
+        hold.release.resolve()
+      })
+
+      it('hold the rescan of a batch until the organize run has ended', async () => {
+        const libraryItemId = await addUnorganizedBook('Book')
+        const [hold] = holdExecutePlan(1)
+        const scanLibraryItem = sinon.stub(LibraryItemScanner, 'scanLibraryItem').resolves(ScanResult.NOTHING)
+        manager.startTask([libraryItemId])
+        await hold.entered.promise
+
+        const { rescan, responded } = rescanBatch([libraryItemId])
+        await responded
+        await flush()
+        expect(scanLibraryItem.called).to.be.false
+        hold.release.resolve()
+        await rescan
+
+        // The organize run rescans the moved item first. The endpoint passes no options.
+        expect(scanLibraryItem.lastCall.args).to.deep.equal([libraryItemId])
+      })
+
+      it('hold the rescan of a batch for the organize runs of every library of its items', async () => {
+        const otherLibrary = await addOtherLibrary()
+        const run = deferred()
+        LibraryScanner.trackOrganizeRun([otherLibrary.id], () => run.promise)
+        sinon.stub(Database.libraryItemModel, 'findAll').resolves([
+          { id: 'li_first', libraryId: library.id, isFile: false },
+          { id: 'li_other', libraryId: otherLibrary.id, isFile: false }
+        ])
+        const scanLibraryItem = sinon.stub(LibraryItemScanner, 'scanLibraryItem').resolves(ScanResult.NOTHING)
+
+        const { rescan, responded } = rescanBatch(['li_first', 'li_other'])
+        await responded
+        await flush()
+        expect(scanLibraryItem.called).to.be.false
+        run.resolve()
+        await rescan
+
+        expect(scanLibraryItem.getCalls().map((call) => call.args[0])).to.deep.equal(['li_first', 'li_other'])
+      })
+
+      it('make organize skip the library while one item is rescanned, and again once it failed', async () => {
+        const libraryItemId = await addUnorganizedBook('Book')
+        const loadedItem = await loadItem(libraryItemId)
+        const scanStarted = deferred()
+        const scanRelease = deferred()
+        sinon.stub(LibraryItemScanner, 'scanLibraryItem').callsFake(async () => {
+          scanStarted.resolve()
+          await scanRelease.promise
+          throw new Error('scan exploded')
         })
+
+        const res = rescanOne(loadedItem)
+        const failed = res.done.catch((error) => error)
+        await scanStarted.promise
+
+        expect(manager.getBusyReason(loadedItem)).to.equal('libraryScanning')
+        expect((await manager.organizeItem(libraryItemId)).reason).to.equal('libraryScanning')
+        scanRelease.resolve()
+        expect((await failed).message).to.equal('scan exploded')
+        expect(manager.getBusyReason(loadedItem)).to.be.null
+        expect(fs.existsSync(rel('Raw Book', 'Book.m4b'))).to.be.true
+      })
+
+      it('make organize skip the libraries while a batch is rescanned', async () => {
+        const libraryItemId = await addUnorganizedBook('Book')
+        const loadedItem = await loadItem(libraryItemId)
+        const scanStarted = deferred()
+        const scanRelease = deferred()
+        sinon.stub(LibraryItemScanner, 'scanLibraryItem').callsFake(async () => {
+          scanStarted.resolve()
+          await scanRelease.promise
+          return ScanResult.NOTHING
+        })
+
+        const { rescan, responded } = rescanBatch([libraryItemId])
+        await responded
+        await scanStarted.promise
+
+        expect(manager.getBusyReason(loadedItem)).to.equal('libraryScanning')
+        scanRelease.resolve()
+        await rescan
+        expect(manager.getBusyReason(loadedItem)).to.be.null
+      })
+
+      it('keep the library marked until the last overlapping rescan has ended', async () => {
+        const libraryItemId = await addUnorganizedBook('Book')
+        const loadedItem = await loadItem(libraryItemId)
+        const firstRelease = deferred()
+        const scanLibraryItem = sinon.stub(LibraryItemScanner, 'scanLibraryItem')
+        scanLibraryItem.onFirstCall().callsFake(() => firstRelease.promise)
+        scanLibraryItem.onSecondCall().resolves(ScanResult.NOTHING)
+
+        const first = rescanOne(loadedItem)
+        await rescanOne(loadedItem).done
+        expect(manager.getBusyReason(loadedItem)).to.equal('libraryScanning')
+        firstRelease.resolve(ScanResult.NOTHING)
+        await first.done
+
+        expect(manager.getBusyReason(loadedItem)).to.be.null
       })
     })
 
@@ -1739,7 +1846,8 @@ describe('OrganizeManager', () => {
       const scan = LibraryScanner.scan(library)
       await firstHold.entered.promise
       firstHold.release.resolve()
-      await runTask.firstCall.returnValue
+      // Either task can reach executePlan first, and only the one holding the first hold ends now
+      await Promise.race(runTask.returnValues)
       await secondHold.entered.promise
       await flush()
       expect(scanLibrary.called).to.be.false
@@ -1897,12 +2005,6 @@ describe('OrganizeManager', () => {
         return [fileUpdates, pendingTask]
       }
 
-      afterEach(() => {
-        LibraryScanner.scanningFilesChanged = false
-        LibraryScanner.pendingFileUpdatesToScan = []
-        LibraryScanner.librariesWatcherScanning.clear()
-      })
-
       it('scans another library while a batch of the organizing library waits', async () => {
         const otherLibrary = await addOtherLibrary()
         const libraryItemId = await addUnorganizedBook('Book')
@@ -1965,6 +2067,63 @@ describe('OrganizeManager', () => {
         expect((await scan).message).to.equal('scan exploded')
         expect(manager.getBusyReason(await loadItem(libraryItemId))).to.be.null
         expect(manager.getBusyReason({ id: 'other', libraryId: otherLibrary.id })).to.be.null
+      })
+
+      it('scans only once no library of a batch has an organize run at the same moment', async () => {
+        const otherLibrary = await addOtherLibrary()
+        const [firstFileUpdates, pendingTask] = watcherBatch(library, libraryFolder)
+        const [otherFileUpdates] = watcherBatch(otherLibrary, otherLibrary.libraryFolders[0])
+        const firstRun = deferred()
+        const otherRun = deferred()
+        const laterRun = deferred()
+        LibraryScanner.trackOrganizeRun([library.id], () => firstRun.promise)
+        LibraryScanner.trackOrganizeRun([otherLibrary.id], () => otherRun.promise)
+        const organizeRunsWhenScanned = []
+        sinon.stub(LibraryScanner, 'scanFolderUpdates').callsFake(async () => {
+          organizeRunsWhenScanned.push(LibraryScanner.hasOrganizeRuns([library.id, otherLibrary.id]))
+          return {}
+        })
+
+        const scan = LibraryScanner.scanFilesChanged([...firstFileUpdates, ...otherFileUpdates], pendingTask)
+        firstRun.resolve()
+        await flush()
+        // A new run starts in the first library while only the other library is still waited on
+        LibraryScanner.trackOrganizeRun([library.id], () => laterRun.promise)
+        otherRun.resolve()
+        await flush()
+        expect(organizeRunsWhenScanned).to.deep.equal([])
+        expect(LibraryScanner.isLibraryFileScanning(library.id)).to.be.false
+        laterRun.resolve()
+        await scan
+
+        expect(organizeRunsWhenScanned).to.deep.equal([false, false])
+      })
+
+      it('keeps scanning queued batches after a batch failed', async () => {
+        const [fileUpdates, pendingTask] = watcherBatch(library, libraryFolder)
+        const scanFolderUpdates = sinon.stub(LibraryScanner, 'scanFolderUpdates')
+        const scanRelease = deferred()
+        scanFolderUpdates.onFirstCall().callsFake(async () => {
+          await scanRelease.promise
+          throw new Error('scan exploded')
+        })
+        const queuedScanned = deferred()
+        scanFolderUpdates.onSecondCall().callsFake(async () => {
+          queuedScanned.resolve()
+          return {}
+        })
+
+        const failed = LibraryScanner.scanFilesChanged(fileUpdates, pendingTask).catch((error) => error)
+        await flush()
+        await LibraryScanner.scanFilesChanged(...watcherBatch(library, libraryFolder))
+        expect(LibraryScanner.pendingFileUpdatesToScan).to.have.length(1)
+        scanRelease.resolve()
+        expect((await failed).message).to.equal('scan exploded')
+        await queuedScanned.promise
+
+        expect(scanFolderUpdates.callCount).to.equal(2)
+        expect(LibraryScanner.pendingFileUpdatesToScan).to.have.length(0)
+        expect(Logger.error.getCalls().some((call) => /Failed to scan files changed from watcher/.test(call.args[0]))).to.be.true
       })
     })
 

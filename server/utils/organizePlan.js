@@ -276,12 +276,10 @@ class LibraryItemPaths {
 
   /**
    * @param {string} folderPath
-   * @param {string} ignoredPath Path of a library item to leave out
    * @returns {boolean}
    */
-  hasPathBelow(folderPath, ignoredPath) {
-    const isIgnoredPathBelow = this.paths.has(ignoredPath) && ignoredPath !== folderPath && isSameOrSubPath(folderPath, ignoredPath)
-    return (this.countsByFolder.get(folderPath) || 0) - (isIgnoredPathBelow ? 1 : 0) > 0
+  hasPathBelow(folderPath) {
+    return (this.countsByFolder.get(folderPath) || 0) > 0
   }
 }
 
@@ -317,13 +315,12 @@ async function isPathOfLibraryItem(path, libraryItemPaths) {
  * Whether a library item has a path below the path, even when it is missing from disk
  *
  * @param {string} path
- * @param {string} ignoredPath Path of the item being organized
  * @param {LibraryItemPaths|null} libraryItemPaths Paths of all items in the library. Looked up in the database when null
  * @returns {Promise<boolean>}
  */
-async function hasLibraryItemBelow(path, ignoredPath, libraryItemPaths) {
-  if (!libraryItemPaths) return !!(await Database.libraryItemModel.findByDescendantPath(path, ignoredPath))
-  return libraryItemPaths.hasPathBelow(path, ignoredPath)
+async function hasLibraryItemBelow(path, libraryItemPaths) {
+  if (!libraryItemPaths) return !!(await Database.libraryItemModel.findByDescendantPath(path))
+  return libraryItemPaths.hasPathBelow(path)
 }
 
 /**
@@ -335,7 +332,7 @@ async function hasLibraryItemBelow(path, ignoredPath, libraryItemPaths) {
  */
 async function getTargetItemReason(libraryFolderPath, toPath, fromPath, libraryItemPaths) {
   if (await isInsideAnotherItem(libraryFolderPath, toPath, libraryItemPaths)) return 'targetInsideItem'
-  if ((await isPathOfLibraryItem(toPath, libraryItemPaths)) || (await hasLibraryItemBelow(toPath, fromPath, libraryItemPaths))) return 'targetExists'
+  if ((await isPathOfLibraryItem(toPath, libraryItemPaths)) || (await hasLibraryItemBelow(toPath, libraryItemPaths))) return 'targetExists'
   return null
 }
 
