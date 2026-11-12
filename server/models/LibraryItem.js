@@ -3,7 +3,7 @@ const { DataTypes, Model } = require('sequelize')
 const fsExtra = require('../libs/fsExtra')
 const Logger = require('../Logger')
 const libraryFilters = require('../utils/queries/libraryFilters')
-const { filePathToPOSIX, getFileTimestampsWithIno, isSameOrSubPath } = require('../utils/fileUtils')
+const { filePathToPOSIX, getFileTimestampsWithIno, getPathsBelowLibraryFolder } = require('../utils/fileUtils')
 const LibraryFile = require('../objects/files/LibraryFile')
 const Book = require('./Book')
 const Podcast = require('./Podcast')
@@ -588,13 +588,7 @@ class LibraryItem extends Model {
    * @returns {Promise<LibraryItem|null>}
    */
   static async findByAncestorPath(libraryFolderPath, path) {
-    const folderPath = filePathToPOSIX(libraryFolderPath)
-    const ancestorPaths = []
-    let directory = Path.posix.dirname(filePathToPOSIX(path))
-    while (directory !== folderPath && isSameOrSubPath(folderPath, directory)) {
-      ancestorPaths.push(directory)
-      directory = Path.posix.dirname(directory)
-    }
+    const ancestorPaths = getPathsBelowLibraryFolder(libraryFolderPath, Path.posix.dirname(filePathToPOSIX(path)))
     if (!ancestorPaths.length) return null
     return this.findOne({ where: { path: ancestorPaths } })
   }
@@ -981,6 +975,39 @@ class LibraryItem extends Model {
 
   getLibraryFilesJson() {
     return this.libraryFiles.map((lf) => new LibraryFile(lf).toJSON())
+  }
+
+  /**
+   * Make the ebook the primary ebook of the book and every other ebook file supplementary. Saves the book and the library item.
+   *
+   * @param {LibraryFile|null} ebookLibraryFile Null for no primary ebook
+   */
+  async setPrimaryEbookFile(ebookLibraryFile) {
+    let primaryEbookFile = null
+    if (ebookLibraryFile) {
+      primaryEbookFile = ebookLibraryFile.toJSON()
+      delete primaryEbookFile.isSupplementary
+      delete primaryEbookFile.fileType
+      primaryEbookFile.ebookFormat = ebookLibraryFile.metadata.format
+    }
+
+    this.media.ebookFile = primaryEbookFile
+    this.media.changed('ebookFile', true)
+    await this.media.save()
+
+    const ebookLibraryFileInos = this.getLibraryFiles()
+      .filter((lf) => lf.isEBookFile)
+      .map((lf) => lf.ino)
+    this.libraryFiles = this.libraryFiles.map((lf) => {
+      if (ebookLibraryFileInos.includes(lf.ino)) {
+        lf.isSupplementary = lf.ino !== primaryEbookFile?.ino
+      }
+      return lf
+    })
+    this.changed('libraryFiles', true)
+
+    this.isMissing = !this.media.hasMediaFiles
+    await this.save()
   }
 
   toOldJSON() {

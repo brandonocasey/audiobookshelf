@@ -8,8 +8,9 @@ const TaskManager = require('./TaskManager')
 const LibraryScanner = require('../scanner/LibraryScanner')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const { ScanResult } = require('../utils/constants')
-const { filePathToPOSIX, isSameOrSubPath, getPathIdentity, isSameFile, isPathTakenByOther } = require('../utils/fileUtils')
-const { buildPlan, planToClientJSON } = require('../utils/organizePlan')
+const { filePathToPOSIX, getPathsBelowLibraryFolder, getPathIdentity, isSameFile, isPathTakenByOther, removeTreeWithReadOnlyFolders } = require('../utils/fileUtils')
+const { buildPlan, getMovedPath, getRenderedTargetKey, planToClientJSON } = require('../utils/organizePlan')
+const { captureMediaChoices, restoreMediaChoices } = require('../utils/organizeMediaChoices')
 const { TEMPLATE_SETTING_KEYS } = require('../utils/organizeTemplate')
 
 const PREVIEW_CHUNK_SIZE = 50
@@ -37,6 +38,7 @@ const MAX_REPORTED_RESULTS = 100
  * @property {string} fromRelPath
  * @property {string} toPath
  * @property {string} toRelPath
+ * @property {import('../utils/organizeMediaChoices').MediaChoices} mediaChoices Book settings from before the moves, restored after each rescan
  * @property {OrganizeStep[]} steps
  * @property {string[]} createdDirectories Folders this run creates, deepest first, removed again on rollback
  * @property {boolean} scanStarted Set before the rescan. Once set, a crashed run is finished instead of rolled back
@@ -49,11 +51,20 @@ const MAX_REPORTED_RESULTS = 100
 class OrganizeManager {
   /**
    * @param {import('./PlaybackSessionManager')} playbackSessionManager
+   * @param {import('./AudioMetadataManager')} audioMetadataManager
+   * @param {import('./AbMergeManager')} abMergeManager
    */
-  constructor(playbackSessionManager) {
+  constructor(playbackSessionManager, audioMetadataManager, abMergeManager) {
     this.playbackSessionManager = playbackSessionManager
+    this.audioMetadataManager = audioMetadataManager
+    this.abMergeManager = abMergeManager
     /** @type {Set<string>} */
     this.itemIdsInProgress = new Set()
+    /** Organizing runs one item at a time so two runs cannot both pass the target check and move onto the same path */
+    this.executionQueue = Promise.resolve()
+    /** @type {Map<string, Promise<Set<string>>>} Item paths per library, kept while a preview or run is active */
+    this.itemPathsByLibraryId = new Map()
+    this.activeRunCount = 0
   }
 
   get journalDirectory() {
@@ -77,7 +88,52 @@ class OrganizeManager {
   getBusyReason(libraryItem) {
     if (LibraryScanner.isLibraryFileScanning(libraryItem.libraryId)) return 'libraryScanning'
     if (this.playbackSessionManager.sessions.some((session) => session.libraryItemId === libraryItem.id)) return 'streaming'
+    // Embedding metadata and merging to m4b write temp files beside the audio and copy the result back to the old path
+    if (this.audioMetadataManager.getIsLibraryItemQueuedOrProcessing(libraryItem.id) || this.abMergeManager.getPendingTaskByLibraryItemId(libraryItem.id)) return 'toolRunning'
     return null
+  }
+
+  /**
+   * Run a preview or a run with the item paths of each library loaded once and kept current
+   *
+   * @template T
+   * @param {() => Promise<T>} run
+   * @returns {Promise<T>}
+   */
+  async withSharedItemPaths(run) {
+    this.activeRunCount++
+    try {
+      return await run()
+    } finally {
+      this.activeRunCount--
+      if (this.activeRunCount === 0) this.itemPathsByLibraryId.clear()
+    }
+  }
+
+  /**
+   * @param {string} libraryId
+   * @returns {Promise<Set<string>|null>} Null outside of a preview or run
+   */
+  async getItemPaths(libraryId) {
+    if (this.activeRunCount === 0) return null
+    if (!this.itemPathsByLibraryId.has(libraryId)) {
+      const itemPaths = Database.libraryItemModel.findAll({ where: { libraryId }, attributes: ['path'] }).then((libraryItems) => new Set(libraryItems.map((libraryItem) => filePathToPOSIX(libraryItem.path))))
+      itemPaths.catch(() => this.itemPathsByLibraryId.delete(libraryId))
+      this.itemPathsByLibraryId.set(libraryId, itemPaths)
+    }
+    return this.itemPathsByLibraryId.get(libraryId)
+  }
+
+  /**
+   * @param {string} libraryId
+   * @param {string} fromPath
+   * @param {string} toPath
+   */
+  async recordMovedItemPath(libraryId, fromPath, toPath) {
+    const itemPaths = await this.itemPathsByLibraryId.get(libraryId)?.catch(() => null)
+    if (!itemPaths) return
+    itemPaths.delete(fromPath)
+    itemPaths.add(toPath)
   }
 
   /**
@@ -88,7 +144,7 @@ class OrganizeManager {
    * @returns {Promise<import('../utils/organizePlan').OrganizePlan>}
    */
   async planItem(libraryItem, library) {
-    const plan = await buildPlan(libraryItem, library)
+    const plan = await buildPlan(libraryItem, library, await this.getItemPaths(libraryItem.libraryId))
     if (plan.changed) plan.skipReason = this.getBusyReason(libraryItem)
     return plan
   }
@@ -108,22 +164,24 @@ class OrganizeManager {
    * @param {string[]} libraryItemIds
    * @returns {Promise<{plans:Object[], unchangedCount:number}>}
    */
-  async previewItems(libraryItemIds) {
-    const librariesById = new Map()
-    const plans = []
-    let unchangedCount = 0
-    for (let i = 0; i < libraryItemIds.length; i += PREVIEW_CHUNK_SIZE) {
-      const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({ id: libraryItemIds.slice(i, i + PREVIEW_CHUNK_SIZE) })
-      for (const libraryItem of libraryItems) {
-        if (!librariesById.has(libraryItem.libraryId)) {
-          librariesById.set(libraryItem.libraryId, await Database.libraryModel.findByIdWithFolders(libraryItem.libraryId))
+  previewItems(libraryItemIds) {
+    return this.withSharedItemPaths(async () => {
+      const librariesById = new Map()
+      const plans = []
+      let unchangedCount = 0
+      for (let i = 0; i < libraryItemIds.length; i += PREVIEW_CHUNK_SIZE) {
+        const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({ id: libraryItemIds.slice(i, i + PREVIEW_CHUNK_SIZE) })
+        for (const libraryItem of libraryItems) {
+          if (!librariesById.has(libraryItem.libraryId)) {
+            librariesById.set(libraryItem.libraryId, await Database.libraryModel.findByIdWithFolders(libraryItem.libraryId))
+          }
+          const plan = await this.planItem(libraryItem, librariesById.get(libraryItem.libraryId))
+          if (plan.changed || plan.skipReason) plans.push(planToClientJSON(plan))
+          else unchangedCount++
         }
-        const plan = await this.planItem(libraryItem, librariesById.get(libraryItem.libraryId))
-        if (plan.changed || plan.skipReason) plans.push(planToClientJSON(plan))
-        else unchangedCount++
       }
-    }
-    return { plans, unchangedCount }
+      return { plans, unchangedCount }
+    })
   }
 
   /**
@@ -139,13 +197,26 @@ class OrganizeManager {
     }
     this.itemIdsInProgress.add(libraryItemId)
     try {
-      return await this.planAndExecuteItem(libraryItemId, expectedHash)
+      return await this.runExclusive(() => this.planAndExecuteItem(libraryItemId, expectedHash))
     } catch (error) {
       Logger.error(`[OrganizeManager] Failed to organize library item "${libraryItemId}"`, error)
       return { itemId: libraryItemId, status: 'failed', error: error.message }
     } finally {
       this.itemIdsInProgress.delete(libraryItemId)
     }
+  }
+
+  /**
+   * Run after every earlier call to this method has finished, whether it succeeded or not
+   *
+   * @template T
+   * @param {() => Promise<T>} task
+   * @returns {Promise<T>}
+   */
+  runExclusive(task) {
+    const result = this.executionQueue.then(task)
+    this.executionQueue = result.catch(() => {})
+    return result
   }
 
   /**
@@ -164,30 +235,45 @@ class OrganizeManager {
     if (expectedHash && expectedHash !== plan.hash) return { itemId: libraryItemId, status: 'skipped', reason: 'planChanged' }
 
     await this.executePlan(libraryItem, library, plan)
+    await this.recordMovedItemPath(libraryItem.libraryId, plan.fromPath, plan.toPath)
     return { itemId: libraryItemId, status: 'moved' }
   }
 
   /**
-   * Ids of the books whose library has auto organize on
+   * Where the library's templates put the book, taken before an edit to tell whether the edit moved it.
    *
-   * @param {string[]} libraryItemIds
-   * @returns {Promise<string[]>}
+   * @param {import('../models/LibraryItem')} libraryItem Expanded library item
+   * @returns {Promise<string|null>} Null when the item is not a book or its library has auto organize off
    */
-  async getAutoOrganizeItemIds(libraryItemIds) {
-    const libraryItems = await Database.libraryItemModel.findAll({ where: { id: libraryItemIds, mediaType: 'book' }, attributes: ['id', 'libraryId'] })
-    const libraries = await Database.libraryModel.findAll({ where: { id: [...new Set(libraryItems.map((libraryItem) => libraryItem.libraryId))] } })
-    const autoOrganizeLibraryIds = new Set(libraries.filter((library) => library.librarySettings.autoOrganize).map((library) => library.id))
-    return libraryItems.filter((libraryItem) => autoOrganizeLibraryIds.has(libraryItem.libraryId)).map((libraryItem) => libraryItem.id)
+  async getAutoOrganizeTarget(libraryItem) {
+    if (!libraryItem.isBook) return null
+    const library = await Database.libraryModel.findByPk(libraryItem.libraryId)
+    if (!library?.librarySettings.autoOrganize) return null
+    return getRenderedTargetKey(libraryItem.media, library.librarySettings)
   }
 
   /**
-   * Organize the item when its library has auto organize on
+   * @param {string} libraryItemId
+   * @param {string|null} targetBefore From getAutoOrganizeTarget before the edit
+   * @returns {Promise<boolean>} True when the edit changed where the templates put the book
+   */
+  async hasTargetChanged(libraryItemId, targetBefore) {
+    if (targetBefore === null) return false
+    const libraryItem = await Database.libraryItemModel.getExpandedById(libraryItemId)
+    if (!libraryItem) return false
+    const targetAfter = await this.getAutoOrganizeTarget(libraryItem)
+    return targetAfter !== null && targetAfter !== targetBefore
+  }
+
+  /**
+   * Organize the item when its library has auto organize on and the edit changed where the templates put it
    *
    * @param {string} libraryItemId
+   * @param {string|null} targetBefore From getAutoOrganizeTarget before the edit
    * @returns {Promise<import('../models/LibraryItem')|null>} The reloaded expanded item when it was moved or renamed
    */
-  async autoOrganizeItem(libraryItemId) {
-    if (!(await this.getAutoOrganizeItemIds([libraryItemId])).length) return null
+  async autoOrganizeItem(libraryItemId, targetBefore) {
+    if (!(await this.hasTargetChanged(libraryItemId, targetBefore))) return null
 
     const result = await this.organizeItem(libraryItemId)
     if (result.status === 'skipped' || result.status === 'failed') {
@@ -197,15 +283,18 @@ class OrganizeManager {
   }
 
   /**
-   * Start a background task for the items whose library has auto organize on
+   * Start a background task for the edited items whose edit changed where the templates put them
    *
-   * @param {string[]} libraryItemIds
+   * @param {Map<string, string|null>} targetsBefore Library item id to getAutoOrganizeTarget from before the edit
    * @returns {Promise<void>}
    */
-  async autoOrganizeItemsInBackground(libraryItemIds) {
+  async autoOrganizeItemsInBackground(targetsBefore) {
     try {
-      const autoOrganizeItemIds = await this.getAutoOrganizeItemIds(libraryItemIds)
-      if (autoOrganizeItemIds.length) this.startTask(autoOrganizeItemIds)
+      const libraryItemIds = []
+      for (const [libraryItemId, targetBefore] of targetsBefore) {
+        if (await this.hasTargetChanged(libraryItemId, targetBefore)) libraryItemIds.push(libraryItemId)
+      }
+      if (libraryItemIds.length) this.startTask(libraryItemIds)
     } catch (error) {
       Logger.error('[OrganizeManager] Failed to start auto organize of edited items', error)
     }
@@ -265,7 +354,16 @@ class OrganizeManager {
    * @param {string[]} libraryItemIds
    * @param {Object<string,string>|null} planHashes
    */
-  async runTask(task, libraryItemIds, planHashes) {
+  runTask(task, libraryItemIds, planHashes) {
+    return this.withSharedItemPaths(() => this.organizeTaskItems(task, libraryItemIds, planHashes))
+  }
+
+  /**
+   * @param {import('../objects/Task')} task
+   * @param {string[]} libraryItemIds
+   * @param {Object<string,string>|null} planHashes
+   */
+  async organizeTaskItems(task, libraryItemIds, planHashes) {
     const counts = { moved: 0, unchanged: 0, skipped: 0, failed: 0 }
     /** @type {OrganizeResult[]} */
     const problems = []
@@ -321,6 +419,7 @@ class OrganizeManager {
       fromRelPath: plan.fromRelPath,
       toPath: plan.toPath,
       toRelPath: plan.toRelPath,
+      mediaChoices: captureMediaChoices(libraryItem.media),
       steps: plan.moves.map((move) => ({ ...move, state: 'pending', tempPath: null })),
       createdDirectories: await this.getMissingDirectories(plan.toPath, filePathToPOSIX(libraryFolder.path)),
       scanStarted: false
@@ -334,7 +433,7 @@ class OrganizeManager {
       await this.runSteps(journal)
       journal.scanStarted = true
       await this.writeJournal(journal)
-      await this.rescanItem(journal, journal.toPath, journal.toRelPath, false)
+      await this.rescanAtTarget(journal)
     } catch (error) {
       await this.rollback(journal)
       throw error
@@ -419,18 +518,32 @@ class OrganizeManager {
   }
 
   /**
-   * Rescan keeps the library item row and refreshes its paths, files and cover
+   * @param {OrganizeJournal} journal
+   */
+  rescanAtTarget(journal) {
+    return this.rescanItem(journal, { path: journal.toPath, relPath: journal.toRelPath, isFile: false, moves: journal.steps })
+  }
+
+  /**
+   * @param {OrganizeJournal} journal
+   */
+  rescanAtSource(journal) {
+    return this.rescanItem(journal, { path: journal.fromPath, relPath: journal.fromRelPath, isFile: journal.isFile, moves: [] })
+  }
+
+  /**
+   * Rescan keeps the library item row and refreshes its paths, files and cover.
+   * The scan resets track and ebook settings that depend on the files, so they are put back after it.
    *
    * @param {OrganizeJournal} journal
-   * @param {string} path Absolute path of the item
-   * @param {string} relPath Path of the item relative to its library folder
-   * @param {boolean} isFile
+   * @param {{path:string, relPath:string, isFile:boolean, moves:OrganizeStep[]}} location Where the item is now, and the moves that took its files there
    */
-  async rescanItem(journal, path, relPath, isFile) {
+  async rescanItem(journal, { path, relPath, isFile, moves }) {
     const scanResult = await LibraryItemScanner.scanLibraryItem(journal.libraryItemId, { path, relPath, libraryFolderId: journal.libraryFolderId, isFile })
     if (scanResult === ScanResult.NOTHING) {
       throw new Error(`Rescan of library item "${journal.libraryItemId}" at "${path}" found nothing to update`)
     }
+    await restoreMediaChoices(journal.libraryItemId, journal.mediaChoices, moves)
   }
 
   /**
@@ -445,7 +558,7 @@ class OrganizeManager {
       return
     }
     if (journal.scanStarted) {
-      await this.rescanItem(journal, journal.fromPath, journal.fromRelPath, journal.isFile).catch((error) => {
+      await this.rescanAtSource(journal).catch((error) => {
         Logger.error(`[OrganizeManager] Failed to rescan library item "${journal.libraryItemId}" at its original path`, error)
       })
     }
@@ -480,7 +593,7 @@ class OrganizeManager {
    */
   async undoStep(journal, step) {
     if (step.state === 'copying') {
-      await fs.remove(step.tempPath)
+      await removeTreeWithReadOnlyFolders(step.tempPath)
     } else if (step.state === 'copied') {
       await this.restoreSourceFromCopy(step)
     } else if (await this.isMovedAway(step)) {
@@ -509,7 +622,7 @@ class OrganizeManager {
     if (!(await getPathIdentity(copyPath)) || (await isSameFile(copyPath, step.from))) return
 
     await fs.copy(copyPath, step.from, { overwrite: false, errorOnExist: false })
-    await fs.remove(copyPath)
+    await removeTreeWithReadOnlyFolders(copyPath)
   }
 
   /**
@@ -521,10 +634,9 @@ class OrganizeManager {
    */
   async getMissingDirectories(path, libraryFolderPath) {
     const missing = []
-    let directory = path
-    while (directory !== libraryFolderPath && isSameOrSubPath(libraryFolderPath, directory) && !(await fs.pathExists(directory))) {
+    for (const directory of getPathsBelowLibraryFolder(libraryFolderPath, path)) {
+      if (await fs.pathExists(directory)) break
       missing.push(directory)
-      directory = Path.posix.dirname(directory)
     }
     return missing
   }
@@ -536,14 +648,12 @@ class OrganizeManager {
    * @param {string} libraryFolderPath
    */
   async removeEmptyParents(path, libraryFolderPath) {
-    let directory = Path.posix.dirname(path)
-    while (directory !== libraryFolderPath && isSameOrSubPath(libraryFolderPath, directory)) {
+    for (const directory of getPathsBelowLibraryFolder(libraryFolderPath, path).slice(1)) {
       const isRemoved = await fs.rmdir(directory).then(
         () => true,
         () => false // Not empty, or already gone
       )
       if (!isRemoved) return
-      directory = Path.posix.dirname(directory)
     }
   }
 
@@ -555,28 +665,12 @@ class OrganizeManager {
    * @returns {{filePathUpdates:{from:string, to:string}[], coverPathUpdate:{from:string, to:string}|null}}
    */
   getFeedPathUpdate(libraryItem, moves) {
-    const filePathUpdates = libraryItem.media.audioFiles.map((audioFile) => ({ from: audioFile.metadata.path, to: this.getMovedPath(audioFile.metadata.path, moves) }))
+    const filePathUpdates = libraryItem.media.audioFiles.map((audioFile) => ({ from: audioFile.metadata.path, to: getMovedPath(audioFile.metadata.path, moves) }))
     const coverPath = libraryItem.media.coverPath
     return {
       filePathUpdates: filePathUpdates.filter((update) => update.from !== update.to),
-      coverPathUpdate: coverPath ? { from: coverPath, to: this.getMovedPath(coverPath, moves) } : null
+      coverPathUpdate: coverPath ? { from: coverPath, to: getMovedPath(coverPath, moves) } : null
     }
-  }
-
-  /**
-   * Where a path ends up after the moves, applied in order. Moving a folder moves the paths inside it.
-   *
-   * @param {string} path
-   * @param {import('../utils/organizePlan').OrganizeMove[]} moves
-   * @returns {string}
-   */
-  getMovedPath(path, moves) {
-    let movedPath = path
-    for (const move of moves) {
-      if (movedPath === move.from) movedPath = move.to
-      else if (movedPath.startsWith(`${move.from}/`)) movedPath = move.to + movedPath.slice(move.from.length)
-    }
-    return movedPath
   }
 
   /**
@@ -610,7 +704,7 @@ class OrganizeManager {
         const journal = JSON.parse(await fs.readFile(Path.join(this.journalDirectory, journalFile), 'utf8'))
         Logger.warn(`[OrganizeManager] Recovering interrupted organize of library item "${journal.libraryItemId}"`)
         if (journal.scanStarted) {
-          await this.rescanItem(journal, journal.toPath, journal.toRelPath, false)
+          await this.rescanAtTarget(journal)
           await this.removeEmptyParents(journal.fromPath, journal.libraryFolderPath)
           await this.removeJournal(journal.libraryItemId)
         } else {

@@ -135,7 +135,7 @@ class Server {
     this.playbackSessionManager = new PlaybackSessionManager()
     this.podcastManager = new PodcastManager()
     this.audioMetadataManager = new AudioMetadataMangaer()
-    this.organizeManager = new OrganizeManager(this.playbackSessionManager)
+    this.organizeManager = new OrganizeManager(this.playbackSessionManager, this.audioMetadataManager, this.abMergeManager)
     this.cronManager = new CronManager(this.podcastManager, this.playbackSessionManager)
     this.apiCacheManager = new ApiCacheManager()
     this.binaryManager = new BinaryManager()

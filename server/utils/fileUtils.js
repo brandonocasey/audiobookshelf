@@ -39,6 +39,52 @@ function isSameOrSubPath(parentPath, childPath) {
 module.exports.isSameOrSubPath = isSameOrSubPath
 
 /**
+ * The path and each parent folder below the library folder, deepest first.
+ * Empty when the path is not inside the library folder.
+ *
+ * @param {string} libraryFolderPath
+ * @param {string} path
+ * @returns {string[]}
+ */
+function getPathsBelowLibraryFolder(libraryFolderPath, path) {
+  const folderPath = filePathToPOSIX(libraryFolderPath)
+  const paths = []
+  let directory = filePathToPOSIX(path)
+  while (directory !== folderPath && isSameOrSubPath(folderPath, directory)) {
+    paths.push(directory)
+    directory = Path.posix.dirname(directory)
+  }
+  return paths
+}
+module.exports.getPathsBelowLibraryFolder = getPathsBelowLibraryFolder
+
+/**
+ * Remove a file or folder tree, also when it holds read-only folders such as a copy of one.
+ * Symlinks are not followed.
+ *
+ * @param {string} path
+ * @returns {Promise<void>}
+ */
+async function removeTreeWithReadOnlyFolders(path) {
+  await makeFoldersWritable(path)
+  await fs.remove(path)
+}
+module.exports.removeTreeWithReadOnlyFolders = removeTreeWithReadOnlyFolders
+
+/**
+ * @param {string} path
+ * @returns {Promise<void>}
+ */
+async function makeFoldersWritable(path) {
+  const stat = await fs.lstat(path).catch(() => null)
+  if (!stat?.isDirectory()) return
+  await fs.chmod(path, stat.mode | 0o700)
+  for (const name of await fs.readdir(path)) {
+    await makeFoldersWritable(Path.join(path, name))
+  }
+}
+
+/**
  * Identity of what is at the path. Symlinks are not followed.
  *
  * @param {string} path

@@ -1,5 +1,6 @@
 const Path = require('path')
 const { sanitizeFilename } = require('./fileUtils')
+const { checkFilepathIsAudioFile } = require('./scandir')
 const globals = require('./globals')
 
 const DEFAULT_FOLDER_TEMPLATE = '{author}/{series}/<{sequence}. >{title}'
@@ -242,7 +243,7 @@ const naturalCompare = new Intl.Collator(undefined, { numeric: true, sensitivity
  */
 function getUploadedFileNames(fileTemplate, values, uploadedNames) {
   const extOf = (name) => Path.extname(name).slice(1).toLowerCase()
-  const audioNames = uploadedNames.filter((name) => globals.SupportedAudioTypes.includes(extOf(name))).sort(naturalCompare)
+  const audioNames = uploadedNames.filter(checkFilepathIsAudioFile).sort(naturalCompare)
   const ebookNames = uploadedNames.filter((name) => globals.SupportedEbookTypes.includes(extOf(name)))
 
   const newNames = new Map()

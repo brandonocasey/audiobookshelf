@@ -228,6 +228,7 @@ class LibraryItemController {
       }
     }
 
+    const organizeTargetBefore = await this.organizeManager.getAutoOrganizeTarget(req.libraryItem)
     let hasUpdates = (await req.libraryItem.media.updateFromRequest(mediaPayload)) || mediaPayload.url
 
     if (req.libraryItem.isBook && Array.isArray(mediaPayload.metadata?.series)) {
@@ -279,7 +280,7 @@ class LibraryItemController {
       Logger.debug(`[LibraryItemController] Updated library item media ${req.libraryItem.media.title}`)
       SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
 
-      req.libraryItem = (await this.organizeManager.autoOrganizeItem(req.libraryItem.id)) || req.libraryItem
+      req.libraryItem = (await this.organizeManager.autoOrganizeItem(req.libraryItem.id, organizeTargetBefore)) || req.libraryItem
     }
     res.json({
       updated: hasUpdates,
@@ -664,7 +665,7 @@ class LibraryItemController {
 
     let itemsUpdated = 0
 
-    const updatedLibraryItemIds = []
+    const organizeTargetsBefore = new Map()
     const seriesIdsRemoved = []
     const authorIdsRemoved = []
 
@@ -677,6 +678,7 @@ class LibraryItemController {
         continue
       }
 
+      const organizeTargetBefore = await this.organizeManager.getAutoOrganizeTarget(libraryItem)
       let hasUpdates = await libraryItem.media.updateFromRequest(mediaPayload)
 
       if (libraryItem.isBook && Array.isArray(mediaPayload.metadata?.series)) {
@@ -717,7 +719,7 @@ class LibraryItemController {
 
         Logger.debug(`[LibraryItemController] Updated library item media "${libraryItem.media.title}"`)
         SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
-        updatedLibraryItemIds.push(libraryItem.id)
+        organizeTargetsBefore.set(libraryItem.id, organizeTargetBefore)
         itemsUpdated++
       }
     }
@@ -735,7 +737,7 @@ class LibraryItemController {
     })
 
     // Runs after the response because moving and rescanning many books is slow
-    this.organizeManager.autoOrganizeItemsInBackground(updatedLibraryItemIds)
+    this.organizeManager.autoOrganizeItemsInBackground(organizeTargetsBefore)
   }
 
   /**
@@ -1180,39 +1182,12 @@ class LibraryItemController {
     }
 
     const ebookLibraryFile = req.libraryFile
-    let primaryEbookFile = null
-
-    const ebookLibraryFileInos = req.libraryItem
-      .getLibraryFiles()
-      .filter((lf) => lf.isEBookFile)
-      .map((lf) => lf.ino)
-
     if (ebookLibraryFile.isSupplementary) {
       Logger.info(`[LibraryItemController] Updating ebook file "${ebookLibraryFile.metadata.filename}" to primary`)
-
-      primaryEbookFile = ebookLibraryFile.toJSON()
-      delete primaryEbookFile.isSupplementary
-      delete primaryEbookFile.fileType
-      primaryEbookFile.ebookFormat = ebookLibraryFile.metadata.format
     } else {
       Logger.info(`[LibraryItemController] Updating ebook file "${ebookLibraryFile.metadata.filename}" to supplementary`)
     }
-
-    req.libraryItem.media.ebookFile = primaryEbookFile
-    req.libraryItem.media.changed('ebookFile', true)
-    await req.libraryItem.media.save()
-
-    req.libraryItem.libraryFiles = req.libraryItem.libraryFiles.map((lf) => {
-      if (ebookLibraryFileInos.includes(lf.ino)) {
-        lf.isSupplementary = lf.ino !== primaryEbookFile?.ino
-      }
-      return lf
-    })
-    req.libraryItem.changed('libraryFiles', true)
-
-    req.libraryItem.isMissing = !req.libraryItem.media.hasMediaFiles
-
-    await req.libraryItem.save()
+    await req.libraryItem.setPrimaryEbookFile(ebookLibraryFile.isSupplementary ? ebookLibraryFile : null)
 
     SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
     res.sendStatus(200)

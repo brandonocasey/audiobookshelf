@@ -906,6 +906,7 @@
   "MessageOrganizeSkipTargetExists": "The target folder already exists",
   "MessageOrganizeSkipTargetInsideItem": "The target folder is inside the folder of another item",
   "MessageOrganizeSkipTargetNested": "The target folder is inside this folder or contains it",
+  "MessageOrganizeSkipToolRunning": "A metadata embed or an m4b merge is running for this item",
   "MessageOrganizeUnchangedCount": "Already organized: {0}",
   "MessageOrganizeWarning": "The scanner would read {0} as \"{1}\" instead of \"{2}\"",
   "MessagePauseChapter": "Pause chapter playback",

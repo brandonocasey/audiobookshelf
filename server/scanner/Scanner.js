@@ -48,6 +48,7 @@ class Scanner {
 
     let updatePayload = {}
     let hasUpdated = false
+    const organizeTargetBefore = await apiRouterCtx.organizeManager.getAutoOrganizeTarget(libraryItem)
 
     if (libraryItem.isBook) {
       const searchISBN = options.isbn || libraryItem.media.isbn
@@ -134,7 +135,7 @@ class Scanner {
 
       SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
 
-      libraryItem = (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id)) || libraryItem
+      libraryItem = (await apiRouterCtx.organizeManager.autoOrganizeItem(libraryItem.id, organizeTargetBefore)) || libraryItem
     }
 
     return {
