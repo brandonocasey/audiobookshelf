@@ -30,7 +30,7 @@ jobs:
       contents: read
       packages: write
     env:
-      # Docker Hub is upstream only. Forks push to their own GHCR.
+      # Docker Hub is upstream only. Forks push to their own GitHub Container Registry.
       IS_UPSTREAM: ${{ github.repository == 'advplyr/audiobookshelf' }}
 
     steps:
